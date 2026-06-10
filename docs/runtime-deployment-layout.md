@@ -1,0 +1,261 @@
+# SE3 运行时部署目录与原生依赖管理方案
+
+## 状态
+
+设计草案。本文定义机器人上 SE3 运行时代码、配置、日志、模型和原生动态库的放置方式。ONNX Runtime 是当前最具体的例子，后续相机 SDK、NPU SDK、TensorRT 插件和其他 `.so` 也按同一套规则管理。
+
+## 要解决的问题
+
+机器人上的运行环境会同时包含 Rust 进程、机器人配置、模型文件、平台 SDK、推理运行时和 systemd service。如果这些文件散落在 `/usr/lib`、用户 home、临时目录和启动脚本旁边，后续排查会很麻烦：
+
+- 不知道某个 `.so` 是系统包提供的，还是项目手工放进去的。
+- 更新 ONNX Runtime 或相机 SDK 时难以回滚。
+- 不同机器人平台的库版本混在一起。
+- systemd 启动失败时，只能从动态链接器报错里猜路径。
+- 机器人重装系统后，很难判断缺的是二进制、配置、模型还是原生库。
+
+这份方案的目标是把 SE3 自己管理的文件集中到清楚的位置，让部署、检查、升级和回滚都有固定入口。
+
+## 依据
+
+本文参考以下一手资料：
+
+- FHS 3.0：`/opt` 用于安装附加应用软件包，包的静态文件应放在 `/opt/<package>` 或 `/opt/<provider>` 下。
+- FHS 3.0：`/etc/opt/<subdir>` 用于 `/opt` 软件包的主机特定配置。
+- FHS 3.0：`/var/opt/<subdir>` 用于 `/opt` 软件包运行中会变化的数据，`/var/log` 用于日志。
+- Linux `ld.so` 手册：动态链接器会按 RPATH、`LD_LIBRARY_PATH`、RUNPATH、`/etc/ld.so.cache`、默认系统库路径等顺序寻找共享库；带斜杠的库路径会被当作路径直接加载。
+- `ort` 文档：`load-dynamic` 支持运行时通过 `ORT_DYLIB_PATH` 或程序显式路径加载 ONNX Runtime 动态库。
+
+## 总体布局
+
+SE3 在机器人上的默认安装前缀是：
+
+```text
+/opt/se3
+```
+
+推荐目录：
+
+```text
+/opt/se3/
+  bin/
+    control
+    auto_strike
+    setup-onnxruntime.sh
+  lib/
+    onnxruntime -> onnxruntime-1.24.2
+    onnxruntime-1.24.2/
+      include/
+      lib/
+        libonnxruntime.so
+  models/
+    yolo/
+    locomotion/
+  robots/
+    infantry_a/
+      robot.toml
+      control.toml
+      auto_strike.toml
+  share/
+    systemd/
+      se3-control.service
+      se3-auto-strike.service
+
+/etc/opt/se3/
+  env/
+    control.env
+    auto_strike.env
+  robots/
+    infantry_a.local.toml
+
+/var/opt/se3/
+  logs/
+  cache/
+  state/
+```
+
+`/opt/se3` 放随部署包一起发布、可以整体替换的内容，包括二进制、私有库、模型、默认机器人配置和 service 模板。`/etc/opt/se3` 放每台机器本地维护的配置覆盖和环境变量文件。`/var/opt/se3` 放运行中会变化的数据，比如日志、缓存、状态快照和回放输出。
+
+早期可以只落地 `/opt/se3/bin`、`/opt/se3/lib`、`/opt/se3/robots` 和 `/var/opt/se3/logs`。目录边界先定住，具体子目录按进程逐步补齐。
+
+## 为什么不用 `/usr/lib`
+
+不要把 SE3 自己下载或打包的 `.so` 放进 `/usr/lib`。
+
+`/usr/lib` 属于系统发行版和包管理器管理的库目录。手动把 ONNX Runtime、相机 SDK 或 NPU SDK 放进去，会把项目私有依赖变成全局依赖，容易影响系统里其他程序。升级时也很难判断某个库是 apt、厂商 SDK 还是 SE3 部署脚本放进去的。
+
+SE3 需要的是应用私有运行时。应用私有库放在 `/opt/se3/lib`，由 SE3 的启动配置显式指定路径。这样问题更容易定位：找不到库就是 SE3 部署包没准备好，不是系统库搜索路径碰巧扫不到。
+
+## 原生动态库管理规则
+
+每个大型原生依赖用独立目录管理：
+
+```text
+/opt/se3/lib/<name>-<version>/
+```
+
+当前生效版本用不带版本号的 symlink 指向：
+
+```text
+/opt/se3/lib/<name> -> <name>-<version>
+```
+
+ONNX Runtime 的例子：
+
+```text
+/opt/se3/lib/
+  onnxruntime -> onnxruntime-1.24.2
+  onnxruntime-1.24.2/
+    include/
+    lib/
+      libonnxruntime.so
+```
+
+这个结构有几个好处：
+
+- 升级时先安装新目录，再切 symlink。
+- 回滚时把 symlink 指回旧目录。
+- 多个平台可以保留不同构建产物，不覆盖彼此。
+- `include/` 和 `lib/` 保留上游包结构，后续编译、诊断和人工检查都方便。
+
+不建议把项目根目录整体加入 `LD_LIBRARY_PATH`。如果某个库支持显式路径加载，优先使用显式路径。ONNX Runtime 通过 `ort` 的 `load-dynamic` 加载时，运行前设置：
+
+```bash
+export ORT_DYLIB_PATH=/opt/se3/lib/onnxruntime/lib/libonnxruntime.so
+```
+
+需要依赖动态链接器搜索路径的库，可以先用 systemd 的 per-service 环境变量限制范围，不要写入全局 `/etc/ld.so.conf`。只有当某个厂商 SDK 明确要求系统级安装时，才考虑把它做成平台安装步骤。
+
+## 配置、模型和日志
+
+机器人默认配置可以跟部署包放在 `/opt/se3/robots/<robot>`。这适合比赛部署，因为一次部署包能完整说明当前运行的是哪套默认配置。
+
+每台机器本地差异放在 `/etc/opt/se3`。比如某台机器临时更换相机、串口名或模型路径，可以放在：
+
+```text
+/etc/opt/se3/robots/infantry_a.local.toml
+```
+
+应用启动时先读 `/opt/se3/robots/<robot>`，再按约定合并 `/etc/opt/se3` 下的本地覆盖。早期如果还没有配置合并逻辑，可以先只使用 `/opt/se3/robots`，但不要把本地覆盖写进 `/usr` 或脚本里。
+
+模型文件放在 `/opt/se3/models`：
+
+```text
+/opt/se3/models/
+  yolo/
+    armor-detector.onnx
+  locomotion/
+    policy.onnx
+```
+
+日志优先交给 systemd journal。需要落盘文件时，写到：
+
+```text
+/var/opt/se3/logs/
+```
+
+缓存、回放中间产物和运行状态放到 `/var/opt/se3/cache` 或 `/var/opt/se3/state`。这些目录可以清理或轮转，不应该影响二进制和原生库。
+
+## systemd 启动约定
+
+systemd unit 不应该依赖登录 shell 的环境变量。每个进程需要的动态库路径写在 service 或 `EnvironmentFile` 里。
+
+示例：
+
+```ini
+[Service]
+EnvironmentFile=-/etc/opt/se3/env/auto_strike.env
+ExecStartPre=/opt/se3/bin/setup-onnxruntime.sh --check
+ExecStart=/opt/se3/bin/auto_strike --robot /opt/se3/robots/infantry_a/robot.toml
+```
+
+`/etc/opt/se3/env/auto_strike.env`：
+
+```text
+ORT_DYLIB_PATH=/opt/se3/lib/onnxruntime/lib/libonnxruntime.so
+```
+
+`ExecStartPre` 只做快速检查，不联网下载。机器人启动阶段缺库应该直接失败并打印明确错误，下载和安装应该发生在部署阶段。
+
+## ONNX Runtime 安装脚本
+
+仓库提供一个最小脚本：
+
+```bash
+tools/setup-onnxruntime.sh
+```
+
+默认行为：
+
+- 当前库存在时，只打印一行并退出。
+- 当前库不存在时，安装到 `/opt/se3/lib/onnxruntime-<version>`，再把 `/opt/se3/lib/onnxruntime` 指向该版本。
+- `--check` 只检查 `/opt/se3/lib/onnxruntime/lib/libonnxruntime.so`，不下载。
+- `SE3_ORT_URL` 可以指向平台专属包，比如 Orin 上按目标 JetPack 构建好的 TensorRT/CUDA 版本。
+
+常用命令：
+
+```bash
+# 部署阶段，安装或确认已安装
+tools/setup-onnxruntime.sh
+
+# 启动前检查
+tools/setup-onnxruntime.sh --check
+
+# 改 SE3 私有库根目录
+SE3_LIB_DIR=/opt/se3/lib tools/setup-onnxruntime.sh
+
+# 使用平台专属 ONNX Runtime 包
+SE3_ORT_URL=https://example.com/onnxruntime-orin.tgz tools/setup-onnxruntime.sh
+```
+
+脚本默认下载 Microsoft 官方 CPU 包，只适合作为最小可用路径。Orin NX、TensorRT、CUDA、OpenVINO、NPU 等平台能力需要平台专属 ONNX Runtime 包。Rust 侧打开 Cargo feature 不会自动让 `libonnxruntime.so` 拥有对应 execution provider。
+
+## ONNX Runtime 兼容性约束
+
+`ort` 自带的 `download-binaries` feature 会下载 pyke 提供的 ONNX Runtime 预构建二进制。`ort` 官方平台说明写明：Linux 预构建二进制需要 `glibc >= 2.39` 和 `libstdc++ >= 13.2`，对应 Ubuntu 24.04 及以上、Debian 13 Trixie 及以上。
+
+机器人部署不要默认依赖这条路径。Ubuntu 22.04、Debian 12、Jetson Orin NX 常见 JetPack 6.0 rootfs 都低于这个要求。更稳的做法是关闭 `download-binaries`，按目标平台准备 ONNX Runtime，再用显式路径加载。
+
+这条规则也适用于其他原生库。`.so` 能不能运行，取决于它构建时使用的 glibc、libstdc++、CUDA、TensorRT、NPU SDK 和目标系统是否匹配。
+
+## 部署检查
+
+部署脚本至少检查这些内容：
+
+```bash
+test -x /opt/se3/bin/control
+test -x /opt/se3/bin/auto_strike
+test -f /opt/se3/lib/onnxruntime/lib/libonnxruntime.so
+test -f /opt/se3/robots/infantry_a/robot.toml
+test -d /opt/se3/models
+```
+
+系统 ABI 可以这样查：
+
+```bash
+ldd --version
+strings /usr/lib/*/libstdc++.so.6 | grep GLIBCXX_ | sort -V | tail -n 1
+```
+
+进程启动前，service 使用 `ExecStartPre` 检查必需库。检查失败就停止启动，不进入业务逻辑。
+
+## 后续演进
+
+后续可以在这个布局上继续补：
+
+- `tools/deploy/`：把构建产物、模型、配置和原生库同步到 `/opt/se3`。
+- `platforms/<name>/platform.toml`：声明该平台需要哪些原生库、模型和环境变量。
+- `tools/check-runtime.sh`：统一检查二进制、配置、模型、原生库和 systemd unit。
+- 版本化发布目录：需要原子回滚时，再引入 `/opt/se3/releases/<commit>` 和 `/opt/se3/current`。
+
+当前先保持一层 `/opt/se3`，把库目录和检查脚本做扎实。
+
+## 参考资料
+
+- [Filesystem Hierarchy Standard 3.0](https://specifications.freedesktop.org/fhs/latest/)
+- [FHS `/opt`](https://specifications.freedesktop.org/fhs/latest/opt.html)
+- [FHS `/etc/opt`](https://specifications.freedesktop.org/fhs/latest/etc.html)
+- [FHS `/var/opt`](https://specifications.freedesktop.org/fhs/latest/varOpt.html)
+- [Linux `ld.so` manual](https://man7.org/linux/man-pages/man8/ld.so.8.html)
+- [`ort` platform support](https://ort.pyke.io/setup/platforms)
+- [`ort` linking guide](https://ort.pyke.io/setup/linking)
