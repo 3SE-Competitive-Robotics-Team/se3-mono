@@ -1,3 +1,6 @@
 [workspace]
 resolver = "3"
-members = []
+members = [
+    "apps/control",
+    "crates/control_core",
+]
