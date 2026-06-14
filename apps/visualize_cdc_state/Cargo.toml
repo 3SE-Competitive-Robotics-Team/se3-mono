@@ -1,0 +1,9 @@
+[package]
+name = "visualize_cdc_state"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+clap.workspace = true
+ctrlc.workspace = true
+locomotion_core = { path = "../../crates/locomotion_core" }

@@ -1,0 +1,8 @@
+[package]
+name = "locomotion"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+clap.workspace = true
+locomotion_core = { path = "../../crates/locomotion_core" }
