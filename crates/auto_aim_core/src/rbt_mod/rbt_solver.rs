@@ -133,8 +133,10 @@ pub fn enemys_solver(
                 }
             })
             .collect::<Vec<RbtLine2>>();
-        let enemy_center_xy = solve_enemy_center(&armors_line_2d)
-            .ok_or(RbtError::StringError("Failed to solve enemy center".into()))?;
+        let Some(enemy_center_xy) = solve_enemy_center(&armors_line_2d) else {
+            warn!("enemys_solver: failed to solve enemy center for {enemy_id:?}");
+            continue;
+        };
 
         // 1.5 得到的base坐标系下敌人中心坐标
         let enemy_base_cylindrical = RbtCylindricalPoint2::from_xy(enemy_center_xy);
@@ -195,7 +197,7 @@ fn solve_enemy_center(armors_line_2d: &[RbtLine2]) -> Option<na::Point2<f64>> {
     } else if armors_line_num == 1 {
         Some(handle_single_armor(&armors_line_2d[0]))
     } else if armors_line_num == 2 {
-        Some(handle_multi_armor(armors_line_2d))
+        handle_multi_armor(armors_line_2d)
     } else {
         warn!("解算出两块以上的装甲板, 跳过");
         None
@@ -211,6 +213,6 @@ fn handle_single_armor(armors_line_2d: &RbtLine2) -> na::Point2<f64> {
 
 /// 处理看到两块装甲板的情况
 /// 使用反向延长线求解中心
-fn handle_multi_armor(armors_line_2d: &[RbtLine2]) -> na::Point2<f64> {
+fn handle_multi_armor(armors_line_2d: &[RbtLine2]) -> Option<na::Point2<f64>> {
     find_intersection(&armors_line_2d[0], &armors_line_2d[1])
 }

@@ -5,8 +5,8 @@ pub struct RbtLine2 {
     pub direction: na::Vector2<f64>, // 直线的方向向量 (V_dir)
 }
 
-// 主函数：寻找交点
-pub fn find_intersection(l1: &RbtLine2, l2: &RbtLine2) -> na::Point2<f64> {
+// 主函数：寻找交点；平行或近似平行时没有稳定交点。
+pub fn find_intersection(l1: &RbtLine2, l2: &RbtLine2) -> Option<na::Point2<f64>> {
     let p1 = l1.point;
     let d1 = l1.direction;
     let p2 = l2.point;
@@ -14,6 +14,9 @@ pub fn find_intersection(l1: &RbtLine2, l2: &RbtLine2) -> na::Point2<f64> {
 
     // --- 第2步：计算行列式/2D叉乘 ---
     let denominator = d1.perp(&d2); // nalgebra的perp()就是计算2D叉乘，非常方便！
+    if denominator.abs() <= f64::EPSILON {
+        return None;
+    }
 
     // 我们需要解出 t: l1(t) = p1 + t*d1
     // t = ((p2 - p1) x d2) / (d1 x d2)
@@ -25,5 +28,5 @@ pub fn find_intersection(l1: &RbtLine2, l2: &RbtLine2) -> na::Point2<f64> {
 
     // 用 t 计算交点
 
-    p1 + t * d1
+    Some(p1 + t * d1)
 }

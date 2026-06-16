@@ -44,7 +44,7 @@ impl SolvedArmor {
         let rot_mat = self.pose.rotation.to_rotation_matrix();
         let matrix = rot_mat.matrix();
         let yaw_from_pose = matrix[(1, 2)].atan2(matrix[(0, 2)]);
-        if yaw_from_pose.is_finite() && yaw_from_pose.abs() > f64::EPSILON {
+        if yaw_from_pose.is_finite() {
             yaw_from_pose
         } else {
             self.enemy_yaw.to_radians()

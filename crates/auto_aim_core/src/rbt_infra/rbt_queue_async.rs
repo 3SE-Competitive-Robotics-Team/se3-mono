@@ -71,8 +71,13 @@ impl<T> RbtSPSCQueueAsync<T> {
     /// 非阻塞弹出最新元素，并丢弃队列中更旧的待处理元素。
     pub fn try_pop_latest(&self) -> Option<T> {
         let mut latest = self.queue.pop()?;
-        while let Some(item) = self.queue.pop() {
-            latest = item;
+        let pending_len = self.queue.len();
+        for _ in 0..pending_len {
+            if let Some(item) = self.queue.pop() {
+                latest = item;
+            } else {
+                break;
+            }
         }
         Some(latest)
     }

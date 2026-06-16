@@ -127,10 +127,10 @@ pub mod rbt_can {
 
     #[cfg(not(target_os = "linux"))]
     impl SocketCanDevice {
-        pub fn open(interface: &str) -> RbtResult<Self> {
-            Err(RbtError::UnsupportedExecutionProvider(format!(
-                "SocketCAN interface {interface} is only supported on Linux"
-            )))
+        pub fn open(_interface: &str) -> RbtResult<Self> {
+            Err(RbtError::UnsupportedExecutionProvider(
+                "SocketCAN is only supported on Linux".to_string(),
+            ))
         }
 
         pub async fn send(&self, _frame: CanFramePayload) -> RbtResult<()> {

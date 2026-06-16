@@ -1401,6 +1401,7 @@ pub fn estimate_process(
         let mut raw_visible = false;
         let mut filtered_visible = false;
         let mut last_transition_seq = runtime_router.state().transition_seq;
+        let estimator_cfg = GENERIC_RBT_CFG.read().unwrap().estimator_cfg.clone();
         loop {
             ticker.tick().await;
             if completion.armor_post_done() && solved_queue.is_empty() {
@@ -1423,9 +1424,9 @@ pub fn estimate_process(
             } else {
                 None
             };
-            estimator_poll.update(&GENERIC_RBT_CFG.read().unwrap().estimator_cfg, enemys);
+            estimator_poll.update(&estimator_cfg, enemys);
             snapshot_seq = snapshot_seq.wrapping_add(1);
-            let target = estimator_poll.selected_snapshot();
+            let target = estimator_poll.selected_snapshot(&estimator_cfg);
             if let Some(raw_enemies) = raw_enemies
                 && let Err(err) = log_rerun_filter_snapshot(
                     &rec,

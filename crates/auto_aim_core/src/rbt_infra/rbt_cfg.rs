@@ -375,6 +375,16 @@ impl CamCfg {
 pub struct EstimatorCfg {
     armor_lost_wait_duration_ms: u64,
     enemy_lost_wait_duration_ms: u64,
+    #[serde(default = "default_image_center_x")]
+    pub image_center_x: f64,
+    #[serde(default = "default_image_center_y")]
+    pub image_center_y: f64,
+    #[serde(default = "default_static_translation_speed_threshold_mps")]
+    pub static_translation_speed_threshold_mps: f64,
+    #[serde(default = "default_static_z_speed_threshold_mps")]
+    pub static_z_speed_threshold_mps: f64,
+    #[serde(default = "default_static_yaw_rate_threshold_rad_s")]
+    pub static_yaw_rate_threshold_rad_s: f64,
     #[serde(default = "default_fire_block_on_armor_jump")]
     pub fire_block_on_armor_jump: bool,
     #[serde(default = "default_fire_armor_jump_block_frames")]
@@ -399,6 +409,26 @@ pub struct EstimatorCfg {
     pub ypd_geometry_recovery_min_h_variance: f64,
     // top1_activate_w: f64,
     // top2_activate_w: f64,
+}
+
+fn default_image_center_x() -> f64 {
+    320.0
+}
+
+fn default_image_center_y() -> f64 {
+    192.0
+}
+
+fn default_static_translation_speed_threshold_mps() -> f64 {
+    0.25
+}
+
+fn default_static_z_speed_threshold_mps() -> f64 {
+    0.20
+}
+
+fn default_static_yaw_rate_threshold_rad_s() -> f64 {
+    0.35
 }
 
 fn default_fire_block_on_armor_jump() -> bool {
@@ -502,9 +532,13 @@ impl RbtCfg {
 
     // 参数正确性校验
     pub fn validation(&self) -> RbtResult<()> {
-        if self.general_cfg.bullet_speed > 25.0 {
+        if self.general_cfg.bullet_speed <= 0.0 || self.general_cfg.bullet_speed > 25.0 {
             rbt_bail_error!(RbtError::InvalidConfig(
-                format!("Bullet speed = {} > 25.0", self.general_cfg.bullet_speed).to_string()
+                format!(
+                    "Bullet speed = {} must be in (0.0, 25.0]",
+                    self.general_cfg.bullet_speed
+                )
+                .to_string()
             ));
         }
         Ok(())

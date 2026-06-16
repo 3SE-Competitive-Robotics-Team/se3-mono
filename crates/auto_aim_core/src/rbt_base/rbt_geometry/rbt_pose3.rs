@@ -167,9 +167,8 @@ impl RbtPose3 {
             error!("需要先将坐标系转换为 base 坐标系");
             return Err(RbtError::CalAngleDisUnderOtherCoord);
         }
-        let yaw = (self.isometry.translation.vector.y / self.isometry.translation.vector.x)
-            .atan()
-            .to_degrees();
+        let translation = self.isometry.translation.vector;
+        let yaw = translation.y.atan2(translation.x).to_degrees();
         Ok(yaw + yaw_bias)
     }
 

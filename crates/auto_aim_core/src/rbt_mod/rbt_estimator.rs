@@ -221,7 +221,7 @@ impl RbtEstimator {
         self.update_fire_observation_hold(cfg, solved_enemy.is_some(), tracker_was_initialized);
     }
 
-    pub fn snapshot(&self) -> Option<EnemyTrackSnapshot> {
+    pub fn snapshot(&self, cfg: &EstimatorCfg) -> Option<EnemyTrackSnapshot> {
         if matches!(
             self.state,
             EstimatorStateMachine::Init | EstimatorStateMachine::Sleep
@@ -250,7 +250,7 @@ impl RbtEstimator {
             state_age_s,
             track_valid: !tracker_snapshot.diverged,
             fire_permit: self.fire,
-            motion_state: target_motion_state(&state),
+            motion_state: target_motion_state(&state, cfg),
             motion_uniform: motion_uniform(tracker_snapshot),
             observation_stable: observation_stable(tracker_snapshot)
                 && self.fire_observation_hold_frames == 0,
@@ -356,7 +356,7 @@ impl RbtEstimator {
 
     fn correct_tracker_with_solution(&mut self, cfg: &EstimatorCfg, solved: &RbtSolvedResult) {
         let observations = self.ypd_observations(solved);
-        let Some(preferred_index) = preferred_observation_index(&observations) else {
+        let Some(preferred_index) = preferred_observation_index(&observations, cfg) else {
             return;
         };
         let armor_num = armor_num_for_enemy(self.enemy_id);
@@ -423,26 +423,34 @@ fn tracker_radial_sign(armor_num: usize) -> f64 {
     if armor_num == 3 { 1.0 } else { -1.0 }
 }
 
-fn preferred_observation_index(observations: &[YpdObservation]) -> Option<usize> {
+fn preferred_observation_index(
+    observations: &[YpdObservation],
+    cfg: &EstimatorCfg,
+) -> Option<usize> {
     observations
         .iter()
         .enumerate()
-        .min_by(|(_, lhs), (_, rhs)| image_center_score(lhs).total_cmp(&image_center_score(rhs)))
+        .min_by(|(_, lhs), (_, rhs)| {
+            image_center_score(lhs, cfg).total_cmp(&image_center_score(rhs, cfg))
+        })
         .map(|(index, _)| index)
 }
 
-fn image_center_score(observation: &YpdObservation) -> f64 {
-    let dx = observation.image_center.x - 320.0;
-    let dy = observation.image_center.y - 192.0;
+fn image_center_score(observation: &YpdObservation, cfg: &EstimatorCfg) -> f64 {
+    let dx = observation.image_center.x - cfg.image_center_x;
+    let dy = observation.image_center.y - cfg.image_center_y;
     dx * dx + dy * dy
 }
 
-fn target_motion_state(state: &[f64; 11]) -> TargetMotionState {
+fn target_motion_state(state: &[f64; 11], cfg: &EstimatorCfg) -> TargetMotionState {
     let translation_speed_mps = (state[1] * 0.001).hypot(state[3] * 0.001);
     let z_speed_mps = (state[5] * 0.001).abs();
     let yaw_rate_rad_s = state[7].abs();
 
-    if translation_speed_mps < 0.25 && z_speed_mps < 0.20 && yaw_rate_rad_s < 0.35 {
+    if translation_speed_mps < cfg.static_translation_speed_threshold_mps
+        && z_speed_mps < cfg.static_z_speed_threshold_mps
+        && yaw_rate_rad_s < cfg.static_yaw_rate_threshold_rad_s
+    {
         TargetMotionState::Static
     } else {
         TargetMotionState::Dynamic
@@ -513,9 +521,9 @@ impl RbtHandlerPoll {
         self.enemy_selector.selected_enemy_id()
     }
 
-    pub fn selected_snapshot(&self) -> Option<EnemyTrackSnapshot> {
+    pub fn selected_snapshot(&self, cfg: &EstimatorCfg) -> Option<EnemyTrackSnapshot> {
         let enemy_id = self.selected_enemy_id()?;
-        self.estimators.get(&enemy_id)?.snapshot()
+        self.estimators.get(&enemy_id)?.snapshot(cfg)
     }
 }
 
@@ -699,7 +707,7 @@ fire_armor_jump_block_frames = 3
         handler_poll.update(&cfg, frame(&[(EnemyId::Hero1, (320.0, 192.0))]));
         handler_poll.update(&cfg, frame(&[(EnemyId::Hero1, (320.0, 192.0))]));
 
-        let snapshot = handler_poll.selected_snapshot().unwrap();
+        let snapshot = handler_poll.selected_snapshot(&cfg).unwrap();
         assert_eq!(snapshot.enemy_id, EnemyId::Hero1);
         assert_eq!(snapshot.armor_count, 4);
         assert!(snapshot.track_valid);
@@ -721,18 +729,19 @@ fire_armor_jump_block_frames = 3
 
         handler_poll.update(&cfg, RbtSolvedResults::default());
 
-        assert!(handler_poll.selected_snapshot().is_none());
+        assert!(handler_poll.selected_snapshot(&cfg).is_none());
     }
 
     #[test]
     fn fire_hold_blocks_stable_tracker_observation() {
+        let cfg = estimator_cfg(1_000);
         let mut estimator = estimator_with_stable_snapshot();
 
-        assert!(estimator.snapshot().unwrap().observation_stable);
+        assert!(estimator.snapshot(&cfg).unwrap().observation_stable);
 
         estimator.fire_observation_hold_frames = 1;
 
-        assert!(!estimator.snapshot().unwrap().observation_stable);
+        assert!(!estimator.snapshot(&cfg).unwrap().observation_stable);
     }
 
     #[test]

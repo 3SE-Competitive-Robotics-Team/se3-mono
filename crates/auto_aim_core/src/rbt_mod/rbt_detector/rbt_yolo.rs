@@ -367,11 +367,10 @@ fn nms_armor_candidates(
     mut candidates: Vec<ArmorCandidate>,
     iou_threshold: f32,
 ) -> Vec<ArmorCandidate> {
-    candidates.sort_by(|left, right| right.score.total_cmp(&left.score));
+    candidates.sort_by(|left, right| left.score.total_cmp(&right.score));
 
     let mut kept = Vec::new();
-    while !candidates.is_empty() {
-        let current = candidates.remove(0);
+    while let Some(current) = candidates.pop() {
         candidates.retain(|candidate| bbox_iou(&current.bbox, &candidate.bbox) < iou_threshold);
         kept.push(current);
     }

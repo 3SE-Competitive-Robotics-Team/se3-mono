@@ -110,7 +110,7 @@ impl Drop for RbtFrame {
                 // 初始状态，该状态仅仅用于创建空的 RbtFrame
                 FAILED_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 error!(
-                    "RbtFrame with id {} is being dropped in Pre, with lifetime {:?}",
+                    "RbtFrame with id {} is being dropped in Init, with lifetime {:?}",
                     self.id,
                     self.time.elapsed()
                 )

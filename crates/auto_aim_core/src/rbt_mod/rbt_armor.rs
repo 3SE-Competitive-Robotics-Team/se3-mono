@@ -20,10 +20,10 @@ pub type ArmorType = EnemyArmorType;
 impl ArmorType {
     /// 小装甲板灯条关键点尺寸，用于输入 pnp
     pub const SMALL_ARMOR_POINT3: [na::Point3<f64>; 4] = [
-        na::Point3::new(-135.0 / 2.0, 55.0 / 2.0, 5.1),
-        na::Point3::new(-135.0 / 2.0, -55.0 / 2.0, 5.2),
-        na::Point3::new(135.0 / 2.0, -55.0 / 2.0, 5.3),
-        na::Point3::new(135.0 / 2.0, 55.0 / 2.0, 5.4),
+        na::Point3::new(-135.0 / 2.0, 55.0 / 2.0, 0.0),
+        na::Point3::new(-135.0 / 2.0, -55.0 / 2.0, 0.0),
+        na::Point3::new(135.0 / 2.0, -55.0 / 2.0, 0.0),
+        na::Point3::new(135.0 / 2.0, 55.0 / 2.0, 0.0),
     ];
 
     /// 大装甲板灯条关键点尺寸，用于输入 pnp

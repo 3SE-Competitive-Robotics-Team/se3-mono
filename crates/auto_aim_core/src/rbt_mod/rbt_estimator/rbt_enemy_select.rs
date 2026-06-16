@@ -11,9 +11,6 @@ pub(super) const TRACKED_ENEMY_IDS: [EnemyId; 6] = [
     EnemyId::Outpost8,
 ];
 
-const DEFAULT_IMAGE_CENTER_X: f64 = 320.0;
-const DEFAULT_IMAGE_CENTER_Y: f64 = 192.0;
-
 #[derive(Debug, Clone)]
 enum EnemySelectState {
     Idle,
@@ -46,6 +43,8 @@ impl EnemySelectHandler {
         cfg: &EstimatorCfg,
         solved_enemies: &RbtSolvedResults,
     ) -> Option<EnemyId> {
+        self.image_center = na::Point2::new(cfg.image_center_x, cfg.image_center_y);
+
         match self.state.clone() {
             EnemySelectState::Idle => self.lock_closest_visible(solved_enemies),
             EnemySelectState::Locked { enemy_id } => {
@@ -134,10 +133,7 @@ impl EnemySelectHandler {
 
 impl Default for EnemySelectHandler {
     fn default() -> Self {
-        Self::new(na::Point2::new(
-            DEFAULT_IMAGE_CENTER_X,
-            DEFAULT_IMAGE_CENTER_Y,
-        ))
+        Self::new(na::Point2::new(320.0, 192.0))
     }
 }
 
