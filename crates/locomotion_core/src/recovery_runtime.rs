@@ -804,9 +804,7 @@ impl RecoveryRuntime {
     }
 
     fn maybe_print(&mut self) {
-        if self.cfg.print_every == 0
-            || !self.stats.steps.is_multiple_of(self.cfg.print_every)
-        {
+        if self.cfg.print_every == 0 || !self.stats.steps.is_multiple_of(self.cfg.print_every) {
             return;
         }
         let now = Instant::now();
@@ -1187,12 +1185,7 @@ mod tests {
         let target = decoder.decode([0.2, -0.3, 0.4, -0.5, 0.6, -0.7]).unwrap();
         assert_close(
             &target.joint_pos,
-            &[
-                0.390_336_6,
-                -0.695_675,
-                1.494_619,
-                2.429_677,
-            ],
+            &[0.390_336_6, -0.695_675, 1.494_619, 2.429_677],
             2.0e-5,
         );
         assert_close(&target.wheel_vel, &[27.000_002, -31.5], 2.0e-5);
