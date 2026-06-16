@@ -2,11 +2,12 @@ use crate::rbt_infra::rbt_cfg::EstimatorCfg;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyId;
 use crate::rbt_mod::rbt_solver::{RbtSolvedResult, RbtSolvedResults};
 
-pub(super) const TRACKED_ENEMY_IDS: [EnemyId; 6] = [
+pub(super) const TRACKED_ENEMY_IDS: [EnemyId; 7] = [
     EnemyId::Hero1,
     EnemyId::Engineer2,
     EnemyId::Infantry3,
     EnemyId::Infantry4,
+    EnemyId::Infantry5,
     EnemyId::Sentry7,
     EnemyId::Outpost8,
 ];
@@ -44,7 +45,6 @@ impl EnemySelectHandler {
         solved_enemies: &RbtSolvedResults,
     ) -> Option<EnemyId> {
         self.image_center = na::Point2::new(cfg.image_center_x, cfg.image_center_y);
-
         match self.state.clone() {
             EnemySelectState::Idle => self.lock_closest_visible(solved_enemies),
             EnemySelectState::Locked { enemy_id } => {

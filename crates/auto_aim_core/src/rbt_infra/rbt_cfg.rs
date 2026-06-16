@@ -393,6 +393,10 @@ pub struct EstimatorCfg {
     pub fire_block_on_armor_jump: bool,
     #[serde(default = "default_fire_armor_jump_block_frames")]
     pub fire_armor_jump_block_frames: usize,
+    #[serde(default = "default_armor_neutral_grace_frames")]
+    pub armor_neutral_grace_frames: usize,
+    #[serde(default = "default_ignore_same_number_condition_switch")]
+    pub ignore_same_number_condition_switch: bool,
     #[serde(default = "default_ypd_geometry_recovery_window_frames")]
     pub ypd_geometry_recovery_window_frames: usize,
     #[serde(default = "default_ypd_geometry_recovery_cooldown_frames")]
@@ -441,6 +445,14 @@ fn default_fire_block_on_armor_jump() -> bool {
 
 fn default_fire_armor_jump_block_frames() -> usize {
     3
+}
+
+fn default_armor_neutral_grace_frames() -> usize {
+    20
+}
+
+fn default_ignore_same_number_condition_switch() -> bool {
+    false
 }
 
 fn default_ypd_geometry_recovery_window_frames() -> usize {
