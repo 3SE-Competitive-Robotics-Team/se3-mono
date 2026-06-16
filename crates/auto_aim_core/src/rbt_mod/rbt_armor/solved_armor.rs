@@ -47,7 +47,7 @@ impl SolvedArmor {
         if yaw_from_pose.is_finite() {
             yaw_from_pose
         } else {
-            self.enemy_yaw.to_radians()
+            self.enemy_yaw
         }
     }
 }

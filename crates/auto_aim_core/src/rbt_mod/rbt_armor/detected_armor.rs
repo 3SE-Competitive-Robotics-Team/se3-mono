@@ -1,10 +1,13 @@
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
+use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyArmorType;
 
 /// 作为 Detector 的输出和 Solver 的输入
 #[derive(Debug, Clone)]
 pub struct DetectedArmor {
     key_points: [RbtImgPoint2; 5],
     _id: usize, // 当前帧画面唯一 id，用于区分每一块装甲板
+    armor_type: EnemyArmorType,
+    neutral_color: bool,
 }
 
 impl DetectedArmor {
@@ -16,9 +19,24 @@ impl DetectedArmor {
         rt: RbtImgPoint2,
         id: usize,
     ) -> Self {
+        Self::with_type_and_color(center, lt, lb, rb, rt, id, EnemyArmorType::Small, false)
+    }
+
+    pub fn with_type_and_color(
+        center: RbtImgPoint2,
+        lt: RbtImgPoint2,
+        lb: RbtImgPoint2,
+        rb: RbtImgPoint2,
+        rt: RbtImgPoint2,
+        id: usize,
+        armor_type: EnemyArmorType,
+        neutral_color: bool,
+    ) -> Self {
         DetectedArmor {
             key_points: [center, lt, lb, rb, rt],
             _id: id,
+            armor_type,
+            neutral_color,
         }
     }
 
@@ -33,6 +51,8 @@ impl DetectedArmor {
                 RbtImgPoint2::new_screen_pixel(corner[8], corner[9]),
             ],
             _id: id,
+            armor_type: EnemyArmorType::Small,
+            neutral_color: false,
         }
     }
 
@@ -63,5 +83,13 @@ impl DetectedArmor {
 
     pub fn corner_points(&self) -> [RbtImgPoint2; 4] {
         [self.lt(), self.lb(), self.rb(), self.rt()]
+    }
+
+    pub fn armor_type(&self) -> EnemyArmorType {
+        self.armor_type
+    }
+
+    pub fn neutral_color(&self) -> bool {
+        self.neutral_color
     }
 }

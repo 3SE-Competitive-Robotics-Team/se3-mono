@@ -39,7 +39,9 @@ use lib::{
             ShotBuffMode, ShotMode, TaskMode,
         },
         rbt_detector::{
-            rbt_frame::{ARMOR_OUTPUT_COLS, ARMOR_OUTPUT_ROWS, RbtFrame, RbtFrameStage},
+            rbt_frame::{
+                ARMOR_OUTPUT_COLS, ARMOR_OUTPUT_ROWS, GimbalPose, RbtFrame, RbtFrameStage,
+            },
             rbt_yolo::{
                 ArmorYoloDecodeStats, ArmorYoloPostprocessCfg, decode_armor_output_with_stats,
                 preprocess_letterbox_f16,
@@ -272,6 +274,7 @@ fn enemy_rerun_name(enemy_id: EnemyId) -> &'static str {
         EnemyId::Engineer2 => "engineer2",
         EnemyId::Infantry3 => "infantry3",
         EnemyId::Infantry4 => "infantry4",
+        EnemyId::Infantry5 => "infantry5",
         EnemyId::Sentry7 => "sentry7",
         EnemyId::Outpost8 => "outpost8",
         EnemyId::Invalid => "invalid",
@@ -665,7 +668,8 @@ fn run_video_preprocess_loop(
         cfg.general_cfg.bullet_speed,
         cfg.general_cfg.offline_task_mode(),
     );
-    feedback_queue.push_latest(offline_feedback);
+    let mut latest_feedback = offline_feedback;
+    feedback_queue.push_latest(latest_feedback);
 
     let mut dropped_energy_frames: u64 = 0;
 
@@ -680,7 +684,10 @@ fn run_video_preprocess_loop(
             break;
         };
         summary.read_total += read_started.elapsed();
-        feedback_queue.push_latest(offline_feedback);
+        if let Some(feedback) = feedback_queue.try_pop_latest() {
+            latest_feedback = feedback;
+        }
+        feedback_queue.push_latest(latest_feedback);
         let frame_img = frame_img.rotate180();
 
         let route_state = runtime_router.state();
@@ -693,6 +700,7 @@ fn run_video_preprocess_loop(
             summary.preprocess_total += preprocess_started.elapsed();
             rbt_frame.set_gray_frame(gray_frame);
             rbt_frame.set_letterbox_transform(transform);
+            rbt_frame.set_gimbal_pose(GimbalPose::from_feedback(latest_feedback));
             rbt_frame.set_id(frame_id);
             rbt_frame.set_state(RbtFrameStage::Pre);
             queue.push_latest(rbt_frame);
@@ -1050,7 +1058,13 @@ pub fn post_process(
                     );
                     let decoded_armor_count = armors.values().map(Vec::len).sum::<usize>();
                     let decoded_enemy_count = armors.len();
-                    let solved_enemies = enemys_solver(armors, &cam_k, frame.gray_frame(), &rec)?;
+                    let solved_enemies = enemys_solver(
+                        armors,
+                        &cam_k,
+                        frame.gray_frame(),
+                        frame.gimbal_pose(),
+                        &rec,
+                    )?;
                     let solved_armor_count = solved_enemies
                         .values()
                         .filter_map(|result| result.as_ref())

@@ -3,29 +3,33 @@
 use image::GrayImage;
 use log::error;
 
-// 硬编码的世界坐标，满足 IPPE 的规范坐标系要求 (Z=0, 中心在原点)
-pub const ARMOR_LIGHT_WEIGHT: f64 = 135.0;
+// 默认使用小装甲板；大装甲板通过 `new_large` 显式构造。
+pub const SMALL_ARMOR_LIGHT_WEIGHT: f64 = 135.0;
+pub const LARGE_ARMOR_LIGHT_WEIGHT: f64 = 225.0;
+pub const ARMOR_LIGHT_WEIGHT: f64 = SMALL_ARMOR_LIGHT_WEIGHT;
 pub const ARMOR_LIGHT_HEIGHT: f64 = 55.0;
 const MAX_REPROJECTION_RMSE_PX: f64 = 8.0;
 const MIN_ARMOR_DEPTH_MM: f64 = 100.0;
 const MAX_ARMOR_DEPTH_MM: f64 = 12_000.0;
 const BRIGHT_PIXEL_THRESHOLD: u8 = 150;
 
-// 世界坐标系点，原点在装甲板中心，Z=0平面，省去归一化
-const ARMOR_WORLD_POINTS: [na::Point3<f64>; 4] = [
-    na::Point3::new(-ARMOR_LIGHT_WEIGHT / 2.0, ARMOR_LIGHT_HEIGHT / 2.0, 0.0), // 左上
-    na::Point3::new(-ARMOR_LIGHT_WEIGHT / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0, 0.0), // 左下
-    na::Point3::new(ARMOR_LIGHT_WEIGHT / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0, 0.0), // 右下
-    na::Point3::new(ARMOR_LIGHT_WEIGHT / 2.0, ARMOR_LIGHT_HEIGHT / 2.0, 0.0),  // 右上
-];
+fn armor_world_points(width_mm: f64) -> [na::Point3<f64>; 4] {
+    [
+        na::Point3::new(-width_mm / 2.0, ARMOR_LIGHT_HEIGHT / 2.0, 0.0),
+        na::Point3::new(-width_mm / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0, 0.0),
+        na::Point3::new(width_mm / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0, 0.0),
+        na::Point3::new(width_mm / 2.0, ARMOR_LIGHT_HEIGHT / 2.0, 0.0),
+    ]
+}
 
-// 世界坐标点，但只有X, Y分量，用于平移计算
-const ARMOR_WORLD_POINTS_2D: [na::Point2<f64>; 4] = [
-    na::Point2::new(-ARMOR_LIGHT_WEIGHT / 2.0, ARMOR_LIGHT_HEIGHT / 2.0), // 左上
-    na::Point2::new(-ARMOR_LIGHT_WEIGHT / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0), // 左下
-    na::Point2::new(ARMOR_LIGHT_WEIGHT / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0), // 右下
-    na::Point2::new(ARMOR_LIGHT_WEIGHT / 2.0, ARMOR_LIGHT_HEIGHT / 2.0),  // 右上
-];
+fn armor_world_points_2d(width_mm: f64) -> [na::Point2<f64>; 4] {
+    [
+        na::Point2::new(-width_mm / 2.0, ARMOR_LIGHT_HEIGHT / 2.0),
+        na::Point2::new(-width_mm / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0),
+        na::Point2::new(width_mm / 2.0, -ARMOR_LIGHT_HEIGHT / 2.0),
+        na::Point2::new(width_mm / 2.0, ARMOR_LIGHT_HEIGHT / 2.0),
+    ]
+}
 
 /// 专为已知尺寸的平面4点目标设计的 pnp 求解器
 /// 基于 IPPE PnP 求解器
@@ -33,14 +37,30 @@ const ARMOR_WORLD_POINTS_2D: [na::Point2<f64>; 4] = [
 pub struct ArmorPnpSolver {
     pws_iso_mat_pinv: na::SMatrix<f64, 4, 3>,
     pws_iso_t_inv: na::Matrix3<f64>,
+    world_points: [na::Point3<f64>; 4],
+    world_points_2d: [na::Point2<f64>; 4],
 }
 
 impl ArmorPnpSolver {
     /// 构建一个新的装甲板求解器
     /// 提前预计算 point_world_matrix 伪逆
     pub fn new() -> Option<Self> {
+        Self::new_small()
+    }
+
+    pub fn new_small() -> Option<Self> {
+        Self::new_with_width(SMALL_ARMOR_LIGHT_WEIGHT)
+    }
+
+    pub fn new_large() -> Option<Self> {
+        Self::new_with_width(LARGE_ARMOR_LIGHT_WEIGHT)
+    }
+
+    pub fn new_with_width(width_mm: f64) -> Option<Self> {
+        let world_points = armor_world_points(width_mm);
+        let world_points_2d = armor_world_points_2d(width_mm);
         if let Some((iso_norm_armor_world_points, iso_norm_pws_t_inv)) =
-            isotropic_normalize(&ARMOR_WORLD_POINTS_2D)
+            isotropic_normalize(&world_points_2d)
         {
             let pws_matrix = na::SMatrix::<f64, 3, 4>::from_columns(&[
                 iso_norm_armor_world_points[0].to_homogeneous().xyz(),
@@ -54,6 +74,8 @@ impl ArmorPnpSolver {
                 Some(Self {
                     pws_iso_mat_pinv: pws_mat_pinv,
                     pws_iso_t_inv: iso_norm_pws_t_inv,
+                    world_points,
+                    world_points_2d,
                 })
             } else {
                 None
@@ -89,13 +111,17 @@ impl ArmorPnpSolver {
             match (pose1_valid, pose2_valid) {
                 (Some((p1, err1)), Some((p2, err2))) => {
                     if err1 < err2 {
-                        Some(p1)
+                        Some(self.optimize_pose_yaw(p1, &refined_img_coord, cam_k))
                     } else {
-                        Some(p2)
+                        Some(self.optimize_pose_yaw(p2, &refined_img_coord, cam_k))
                     }
                 }
-                (Some((p1, _)), None) => Some(p1),
-                (None, Some((p2, _))) => Some(p2),
+                (Some((p1, _)), None) => {
+                    Some(self.optimize_pose_yaw(p1, &refined_img_coord, cam_k))
+                }
+                (None, Some((p2, _))) => {
+                    Some(self.optimize_pose_yaw(p2, &refined_img_coord, cam_k))
+                }
                 (None, None) => None,
             }
         } else {
@@ -271,7 +297,7 @@ impl ArmorPnpSolver {
         for i in 0..4 {
             let u = p_norm[i].x;
             let v = p_norm[i].y;
-            let p_world_2d = ARMOR_WORLD_POINTS_2D[i];
+            let p_world_2d = self.world_points_2d[i];
 
             let rx = r_mat[(0, 0)] * p_world_2d.x + r_mat[(0, 1)] * p_world_2d.y;
             let ry = r_mat[(1, 0)] * p_world_2d.x + r_mat[(1, 1)] * p_world_2d.y;
@@ -328,7 +354,7 @@ impl ArmorPnpSolver {
             return false;
         }
         // 确保所有点变换后都在相机前方
-        for point in &ARMOR_WORLD_POINTS {
+        for point in &self.world_points {
             if (pose * point).z <= 0.0 {
                 return false;
             }
@@ -346,7 +372,7 @@ impl ArmorPnpSolver {
     ) -> f64 {
         let mut sum_sq_err = 0.0;
         for i in 0..4 {
-            let pw = &ARMOR_WORLD_POINTS[i];
+            let pw = &self.world_points[i];
             let pc = pose * pw; // 将世界点变换到相机坐标系
 
             // 检查点是否在相机前方
@@ -367,6 +393,80 @@ impl ArmorPnpSolver {
 
         (sum_sq_err / 4.0).sqrt()
     }
+
+    fn optimize_pose_yaw(
+        &self,
+        pose: na::Isometry3<f64>,
+        uvs: &[na::Point2<f64>; 4],
+        k: &na::Matrix3<f64>,
+    ) -> na::Isometry3<f64> {
+        let Some(best_yaw_rad) = self.optimize_yaw_rad(uvs, k, pose.translation.vector) else {
+            return pose;
+        };
+        let rotation = optimized_armor_rotation(best_yaw_rad, 15.0_f64.to_radians());
+        na::Isometry3::from_parts(
+            pose.translation,
+            na::UnitQuaternion::from_rotation_matrix(&rotation),
+        )
+    }
+
+    fn optimize_yaw_rad(
+        &self,
+        uvs: &[na::Point2<f64>; 4],
+        k: &na::Matrix3<f64>,
+        translation: na::Vector3<f64>,
+    ) -> Option<f64> {
+        let mut best_yaw_deg = self.search_yaw_deg(-80.0, 80.0, 2.0, uvs, k, translation)?;
+        best_yaw_deg = self.search_yaw_deg(
+            best_yaw_deg - 2.0,
+            best_yaw_deg + 2.0,
+            0.1,
+            uvs,
+            k,
+            translation,
+        )?;
+        Some(best_yaw_deg.to_radians())
+    }
+
+    fn search_yaw_deg(
+        &self,
+        start_deg: f64,
+        end_deg: f64,
+        step_deg: f64,
+        uvs: &[na::Point2<f64>; 4],
+        k: &na::Matrix3<f64>,
+        translation: na::Vector3<f64>,
+    ) -> Option<f64> {
+        if step_deg <= 0.0 {
+            return None;
+        }
+        let mut best_yaw = None;
+        let mut best_err = f64::INFINITY;
+        let mut yaw_deg = start_deg;
+        while yaw_deg <= end_deg + 1e-9 {
+            let rotation = optimized_armor_rotation(yaw_deg.to_radians(), 15.0_f64.to_radians());
+            let pose = na::Isometry3::from_parts(
+                na::Translation3::from(translation),
+                na::UnitQuaternion::from_rotation_matrix(&rotation),
+            );
+            let err = self.eval_reproj_err(&pose, uvs, k);
+            if err.is_finite() && err < best_err {
+                best_err = err;
+                best_yaw = Some(yaw_deg);
+            }
+            yaw_deg += step_deg;
+        }
+        best_yaw
+    }
+}
+
+fn optimized_armor_rotation(yaw_rad: f64, armor_tilt_rad: f64) -> na::Rotation3<f64> {
+    let r_base = na::Rotation3::from_matrix_unchecked(na::Matrix3::new(
+        0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0,
+    ));
+    let r_yaw = na::Rotation3::from_axis_angle(&na::Vector3::z_axis(), yaw_rad);
+    let r_pitch = na::Rotation3::from_axis_angle(&na::Vector3::y_axis(), armor_tilt_rad);
+    r_base * r_yaw * r_pitch
 }
 
 fn refine_armor_corners(

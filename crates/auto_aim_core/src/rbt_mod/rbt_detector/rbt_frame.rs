@@ -1,6 +1,7 @@
 use tokio::time::Instant;
 
 use crate::rbt_infra::rbt_global::FAILED_COUNT;
+use crate::rbt_mod::rbt_comm::rbt_comm_frame::SensData;
 use crate::rbt_mod::rbt_detector::rbt_yolo::LetterboxTransform;
 use image::GrayImage;
 use log::{debug, error, warn};
@@ -9,6 +10,31 @@ pub const ARMOR_INPUT_WIDTH: usize = 640;
 pub const ARMOR_INPUT_HEIGHT: usize = 640;
 pub const ARMOR_OUTPUT_ROWS: usize = 25_200;
 pub const ARMOR_OUTPUT_COLS: usize = 22;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GimbalPose {
+    pub roll_deg: f64,
+    pub yaw_deg: f64,
+    pub pitch_deg: f64,
+}
+
+impl GimbalPose {
+    pub fn from_feedback(feedback: SensData) -> Self {
+        Self {
+            roll_deg: feedback.gimbal_roll as f64,
+            yaw_deg: feedback.gimbal_yaw as f64,
+            pitch_deg: feedback.gimbal_pitch as f64,
+        }
+    }
+
+    pub fn yaw_rad(self) -> f64 {
+        self.yaw_deg.to_radians()
+    }
+
+    pub fn pitch_rad(self) -> f64 {
+        self.pitch_deg.to_radians()
+    }
+}
 
 pub struct RbtFrame {
     time: Instant,
@@ -44,6 +70,7 @@ impl RbtFrame {
                 infer_post: nd::Array2::<f32>::zeros([ARMOR_OUTPUT_ROWS, ARMOR_OUTPUT_COLS]),
                 letterbox: LetterboxTransform::default(),
                 gray_frame: None,
+                gimbal_pose: GimbalPose::default(),
             },
             id: 0,
             stage: RbtFrameStage::Init,
@@ -98,6 +125,14 @@ impl RbtFrame {
         self.data.gray_frame.as_ref()
     }
 
+    pub fn set_gimbal_pose(&mut self, pose: GimbalPose) {
+        self.data.gimbal_pose = pose;
+    }
+
+    pub fn gimbal_pose(&self) -> GimbalPose {
+        self.data.gimbal_pose
+    }
+
     pub fn time_used(&self) -> std::time::Duration {
         self.time.elapsed()
     }
@@ -150,6 +185,7 @@ pub struct RbtFrameData {
     infer_post: nd::Array2<f32>,
     letterbox: LetterboxTransform,
     gray_frame: Option<GrayImage>,
+    gimbal_pose: GimbalPose,
 }
 
 #[cfg(test)]

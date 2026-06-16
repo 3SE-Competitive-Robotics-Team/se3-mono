@@ -8,7 +8,7 @@
 //! - EnemyArmorType: 装甲板大小类型
 //! - EnemyArmorLayout: 装甲板布局定义
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// 描述敌方装甲板大或者小
 pub enum EnemyArmorType {
     Small,
@@ -31,6 +31,7 @@ pub enum EnemyId {
     Engineer2,
     Infantry3,
     Infantry4,
+    Infantry5,
     Sentry7,
     Outpost8,
     Invalid,
