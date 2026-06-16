@@ -49,8 +49,8 @@ impl Default for YawPlannerConfig {
             execution_delay_s: 0.0,
             preview_dt_s: 0.01,
             preview_horizon: 16,
-            armor_enter_angle_deg: 50.0,
-            armor_leave_angle_deg: 30.0,
+            armor_enter_angle_deg: 55.0,
+            armor_leave_angle_deg: 20.0,
         }
     }
 }

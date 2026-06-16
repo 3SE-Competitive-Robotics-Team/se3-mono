@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn stale_or_invalid_target_is_suppressed() {
         let mut controller = FireControlController::new().unwrap();
-        let mut stale = input(Some(target(TargetMotionState::Dynamic)), true, true);
+        let mut stale = input(Some(target(TargetMotionState::Spinning)), true, true);
         stale.snapshot_age_ms = 250.0;
 
         let control = controller.update(stale);
@@ -663,7 +663,7 @@ mod tests {
         let mut controller = FireControlController::new().unwrap();
 
         let control =
-            controller.update(input(Some(target(TargetMotionState::Dynamic)), true, true));
+            controller.update(input(Some(target(TargetMotionState::Spinning)), true, true));
         let stats = controller.last_stats();
 
         assert!(stats.preview_mpc_active);
@@ -675,10 +675,16 @@ mod tests {
     fn mcu_or_stale_feedback_blocks_fire() {
         let mut controller = FireControlController::new().unwrap();
 
-        let mcu_blocked =
-            controller.update(input(Some(target(TargetMotionState::Dynamic)), true, false));
-        let stale_feedback =
-            controller.update(input(Some(target(TargetMotionState::Dynamic)), false, true));
+        let mcu_blocked = controller.update(input(
+            Some(target(TargetMotionState::Spinning)),
+            true,
+            false,
+        ));
+        let stale_feedback = controller.update(input(
+            Some(target(TargetMotionState::Spinning)),
+            false,
+            true,
+        ));
 
         assert_eq!(mcu_blocked.shot_mode, ShotMode::AimOnly);
         assert_eq!(stale_feedback.shot_mode, ShotMode::AimOnly);
