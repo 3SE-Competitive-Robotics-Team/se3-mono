@@ -1,6 +1,9 @@
 [package]
 name = "control_core"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
+libc.workspace = true
+locomotion_core.workspace = true
+thiserror.workspace = true
