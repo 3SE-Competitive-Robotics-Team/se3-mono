@@ -1,1 +1,7 @@
 target/
+log/
+crates/log/
+imgs/
+videos/
+model/
+rerun-log/

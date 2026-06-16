@@ -1,0 +1,104 @@
+# rbt_cfg.toml
+# todo!(需要开发一个检查无用字段功能，防止修改未使用参数来调整自瞄效果)
+
+[game_cfg]
+# 电控发送优先级大于自己设置的优先级
+# 如果设置出现错误，会有 log 警告
+enemy_fraction = "B"
+# enemy_fraction = "R"
+
+[logger_cfg]
+console_log_filter = "info,auto_aim_core=debug,auto_aim=debug,ort=warn"
+file_log_filter = "info,auto_aim_core=debug,auto_aim=debug,ort=info"
+console_log_enable = true
+file_log_enable = true
+
+[general_cfg]
+img_dbg = false
+bullet_speed = 24.0
+can_interface = "can0"
+can_enabled = false
+offline_task_mode = "HitBigBuff"
+
+[detector_cfg]
+# 神经网络模型分别放在 model/armor 和 model/engine_mechanism 目录下
+camera_img_width = 1280
+camera_img_height = 720
+infer_img_width = 640
+infer_img_height = 640
+# auto: macOS -> CoreML, linux aarch64 with CUDA + TensorRT -> TensorRT,
+# linux aarch64 with CUDA + cuDNN -> CUDA, x86_64 Linux/Windows -> OpenVINO,
+# other targets -> CPU.
+ort_ep = "auto"
+
+[detector_cfg.armor]
+model_path = "./model/armor/Armor.onnx"
+engine_path = "./model/armor"
+score_threshold = 0.5
+confidence_threshold = 0.5
+nms_iou_threshold = 0.45
+
+[detector_cfg.energy_mechanism]
+model_path = "./model/engine_mechanism/EngineMechanism.onnx"
+engine_path = "./model/engine_mechanism"
+confidence_threshold = 0.8
+nms_iou_threshold = 0.4
+
+# 能量机关 tracker / aimer / mpc 配置。检测参数继续放在上面的 detector_cfg.energy_mechanism。
+[energy_mechanism_cfg.tracker]
+lost_timeout_s = 0.35
+big_lost_timeout_s = 0.08
+big_model_reset_timeout_s = 0.35
+big_curve_ekf_fit_enabled = true
+big_phase_process_noise = 0.02
+big_a_process_noise = 1e-6
+big_w_process_noise = 3e-6
+big_measurement_noise_scale = 4.0
+big_speed_measurement_enabled = true
+big_speed_measurement_noise = 1.50
+big_speed_measurement_gate = 1.2
+big_curve_speed_slew_limit = 3.0
+big_speed_measurement_window_samples = 16
+big_speed_measurement_window_s = 0.30
+big_speed_measurement_min_history = 20
+big_curve_phi_correction_limit = 0.0
+big_phi_seed_frames = 15
+
+[energy_mechanism_cfg.aimer]
+predict_time_s = 0.0
+fire_gap_s = 0.2
+yaw_offset_deg = 0.0
+pitch_offset_deg = 0.0
+pitch_velocity_lead_time_s = 0.0
+snapshot_stale_ms = 180.0
+
+[energy_mechanism_cfg.mpc]
+model_dt_s = 0.004
+horizon = 50
+track_q = 3198.0
+rate_q = 0.0
+command_q = 1000.0
+delta_r = 48343.0
+
+[cam_cfg]
+cam_k = [1600.0, 0.0, 320.0, 0.0, 1705.7, 192.0, 0.0, 0.0, 1.0]
+
+[estimator_cfg]
+armor_lost_wait_duration_ms = 100
+enemy_lost_wait_duration_ms = 1000
+image_center_x = 320.0
+image_center_y = 192.0
+static_translation_speed_threshold_mps = 0.25
+static_z_speed_threshold_mps = 0.20
+static_yaw_rate_threshold_rad_s = 0.35
+fire_block_on_armor_jump = true
+fire_armor_jump_block_frames = 3
+ypd_geometry_recovery_window_frames = 24
+ypd_geometry_recovery_cooldown_frames = 12
+ypd_geometry_recovery_mismatch_required_streak = 2
+ypd_geometry_recovery_min_matched_count = 2
+ypd_geometry_recovery_z_sigma_threshold = 3.0
+ypd_geometry_recovery_xy_sigma_threshold = 2.0
+ypd_geometry_recovery_cov_inflation_scale = 48.0
+ypd_geometry_recovery_min_dr_variance = 0.0025
+ypd_geometry_recovery_min_h_variance = 0.000625

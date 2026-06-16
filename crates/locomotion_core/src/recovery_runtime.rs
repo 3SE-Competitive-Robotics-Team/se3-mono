@@ -512,7 +512,7 @@ impl RecoveryRuntime {
         let policy_inference_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.record_policy_inference(policy_inference_ms);
         let mut action = [0.0_f32; 6];
-        for (dst, src) in action.iter_mut().zip(action_vec.into_iter()) {
+        for (dst, src) in action.iter_mut().zip(action_vec) {
             if src.is_finite() {
                 *dst = src;
             } else {
@@ -804,7 +804,7 @@ impl RecoveryRuntime {
     }
 
     fn maybe_print(&mut self) {
-        if self.cfg.print_every == 0 || self.stats.steps % self.cfg.print_every != 0 {
+        if self.cfg.print_every == 0 || !self.stats.steps.is_multiple_of(self.cfg.print_every) {
             return;
         }
         let now = Instant::now();
@@ -1185,15 +1185,10 @@ mod tests {
         let target = decoder.decode([0.2, -0.3, 0.4, -0.5, 0.6, -0.7]).unwrap();
         assert_close(
             &target.joint_pos,
-            &[
-                0.3903366029262543,
-                -0.6956750154495239,
-                1.4946190118789673,
-                2.4296770095825195,
-            ],
+            &[0.390_336_6, -0.695_675, 1.494_619, 2.429_677],
             2.0e-5,
         );
-        assert_close(&target.wheel_vel, &[27.000001907348633, -31.5], 2.0e-5);
+        assert_close(&target.wheel_vel, &[27.000_002, -31.5], 2.0e-5);
     }
 
     fn assert_close<const N: usize>(actual: &[f32; N], expected: &[f32; N], tol: f32) {

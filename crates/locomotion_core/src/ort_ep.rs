@@ -106,7 +106,7 @@ fn configure_coreml(
     session_builder: SessionBuilder,
     model_cache_dir: &Path,
 ) -> Result<SessionBuilder, OrtEpError> {
-    Ok(session_builder
+    session_builder
         .with_execution_providers([ep::CoreMLExecutionProvider::default()
             .with_compute_units(ep::coreml::ComputeUnits::All)
             .with_model_format(ep::coreml::ModelFormat::MLProgram)
@@ -115,7 +115,7 @@ fn configure_coreml(
             .with_model_cache_dir(model_cache_dir.to_string_lossy())
             .build()
             .error_on_failure()])
-        .map_err(builder_error)?)
+        .map_err(builder_error)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -133,12 +133,12 @@ fn configure_coreml(
     any(target_os = "linux", target_os = "windows")
 ))]
 fn configure_openvino(session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
-    Ok(session_builder
+    session_builder
         .with_execution_providers([ep::OpenVINOExecutionProvider::default()
             .with_device_type("GPU")
             .build()
             .error_on_failure()])
-        .map_err(builder_error)?)
+        .map_err(builder_error)
 }
 
 #[cfg(not(all(
