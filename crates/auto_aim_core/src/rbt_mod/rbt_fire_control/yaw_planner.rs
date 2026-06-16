@@ -72,7 +72,9 @@ impl PlannerTarget {
     }
 
     pub fn from_snapshot(snapshot: &EnemyTrackSnapshot) -> Self {
-        Self::new(snapshot.armor_count, snapshot.planner_state())
+        let mut target = Self::new(snapshot.armor_count, snapshot.planner_state());
+        target.predict(snapshot.state_age_s.clamp(0.0, 0.2));
+        target
     }
 
     pub fn predict(&mut self, dt_s: f64) {
