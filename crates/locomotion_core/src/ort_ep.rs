@@ -133,12 +133,12 @@ fn configure_coreml(
     any(target_os = "linux", target_os = "windows")
 ))]
 fn configure_openvino(session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
-    Ok(session_builder
+    session_builder
         .with_execution_providers([ep::OpenVINOExecutionProvider::default()
             .with_device_type("GPU")
             .build()
             .error_on_failure()])
-        .map_err(builder_error)?)
+        .map_err(builder_error)
 }
 
 #[cfg(not(all(
