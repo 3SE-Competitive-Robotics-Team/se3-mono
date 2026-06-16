@@ -22,11 +22,13 @@ jobs:
         with:
           filters: |
             needs-rust:
-              - '**'
-              - '!**/*.md'
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
             needs-python:
-              - '**'
-              - '!**/*.md'
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
 
   rust:
     name: Rust
