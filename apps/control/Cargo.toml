@@ -1,7 +1,9 @@
 [package]
 name = "control"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
+clap.workspace = true
 control_core = { path = "../../crates/control_core" }
+locomotion_core.workspace = true
