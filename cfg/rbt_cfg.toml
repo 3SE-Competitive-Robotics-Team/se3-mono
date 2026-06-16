@@ -81,13 +81,13 @@ command_q = 1000.0
 delta_r = 48343.0
 
 [cam_cfg]
-cam_k = [1600.0, 0.0, 320.0, 0.0, 1705.7, 192.0, 0.0, 0.0, 1.0]
+cam_k = [3200.0, 0.0, 640.0, 0.0, 3198.1875, 360.0, 0.0, 0.0, 1.0]
 
 [estimator_cfg]
 armor_lost_wait_duration_ms = 100
 enemy_lost_wait_duration_ms = 1000
-image_center_x = 320.0
-image_center_y = 192.0
+image_center_x = 640.0
+image_center_y = 360.0
 static_translation_speed_threshold_mps = 0.25
 static_z_speed_threshold_mps = 0.20
 static_yaw_rate_threshold_rad_s = 0.35

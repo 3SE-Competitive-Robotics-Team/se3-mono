@@ -369,6 +369,10 @@ impl CamCfg {
     pub fn cam_k(&self) -> nalgebra::Matrix3<f64> {
         nalgebra::Matrix3::from_row_slice(&self.cam_k)
     }
+
+    fn principal_point(&self) -> (f64, f64) {
+        (self.cam_k[2], self.cam_k[5])
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -541,6 +545,32 @@ impl RbtCfg {
                 .to_string()
             ));
         }
+        self.validate_camera_geometry()?;
+        Ok(())
+    }
+
+    fn validate_camera_geometry(&self) -> RbtResult<()> {
+        let width = self.detector_cfg.camera_img_width as f64;
+        let height = self.detector_cfg.camera_img_height as f64;
+        let expected_cx = width * 0.5;
+        let expected_cy = height * 0.5;
+        let (cam_cx, cam_cy) = self.cam_cfg.principal_point();
+        const CENTER_TOLERANCE_PX: f64 = 2.0;
+
+        if (cam_cx - expected_cx).abs() > CENTER_TOLERANCE_PX
+            || (cam_cy - expected_cy).abs() > CENTER_TOLERANCE_PX
+            || (self.estimator_cfg.image_center_x - expected_cx).abs() > CENTER_TOLERANCE_PX
+            || (self.estimator_cfg.image_center_y - expected_cy).abs() > CENTER_TOLERANCE_PX
+        {
+            return Err(RbtError::InvalidConfig(format!(
+                "camera geometry mismatch: detector image is {}x{}, cam_k principal point is ({cam_cx:.1}, {cam_cy:.1}), estimator image center is ({:.1}, {:.1}); all must use original frame coordinates near ({expected_cx:.1}, {expected_cy:.1})",
+                self.detector_cfg.camera_img_width,
+                self.detector_cfg.camera_img_height,
+                self.estimator_cfg.image_center_x,
+                self.estimator_cfg.image_center_y
+            )));
+        }
+
         Ok(())
     }
 }
