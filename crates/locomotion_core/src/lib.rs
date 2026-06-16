@@ -127,18 +127,14 @@ mod tests {
         assert_close32(
             &decoded.leg_target,
             &[
-                0.3903366029262543,
-                -0.6956750154495239,
-                1.4946190118789673,
-                2.4296770095825195,
+                0.390_336_6,
+                -0.695_675,
+                1.494_619,
+                2.429_677,
             ],
             2.0e-5,
         );
-        assert_close32(
-            &decoded.wheel_vel_target,
-            &[27.000001907348633, -31.5],
-            2.0e-5,
-        );
+        assert_close32(&decoded.wheel_vel_target, &[27.000_002, -31.5], 2.0e-5);
     }
 
     fn assert_close64<const N: usize>(actual: &[f64; N], expected: &[f64; N], tol: f64) {

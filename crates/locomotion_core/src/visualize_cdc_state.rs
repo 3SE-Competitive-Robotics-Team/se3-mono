@@ -614,7 +614,7 @@ fn parse_http_url(
 ) -> Result<(String, u16, String), Box<dyn std::error::Error + Send + Sync>> {
     let rest = url
         .strip_prefix("http://")
-        .ok_or_else(|| "only http:// remote URLs are supported by the Rust relay")?;
+        .ok_or("only http:// remote URLs are supported by the Rust relay")?;
     let (host_port, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (host, port) = if let Some((host, port)) = host_port.rsplit_once(':') {
         (host.to_string(), port.parse()?)

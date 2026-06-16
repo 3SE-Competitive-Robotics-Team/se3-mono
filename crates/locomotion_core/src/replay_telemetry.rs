@@ -167,10 +167,10 @@ fn replay_rows(
         }
         stats.sample_rows += 1;
 
-        if let Some(row_period_ms) = optional_f64(row.get("sample_period_ms")) {
-            if row_period_ms > 0.0 {
-                period_ms = row_period_ms;
-            }
+        if let Some(row_period_ms) = optional_f64(row.get("sample_period_ms"))
+            && row_period_ms > 0.0
+        {
+            period_ms = row_period_ms;
         }
         let time_s = row_time_s(&row);
         if let Some(last_time_s) = last_time_s {
