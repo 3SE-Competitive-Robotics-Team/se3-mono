@@ -11,7 +11,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         type=Path,
-        default=Path("/Users/flamingo/Projects/robomaster/se3_rl/assets/robots/serialleg/mjcf/serialleg_fidelity_cylinder_wheels.xml"),
+        required=True,
+        help="MJCF model file path",
     )
     parser.add_argument("--socket-path", type=Path, default=Path("/tmp/se3_sim_loop.sock"))
     parser.add_argument("--max-steps", type=int, default=0)

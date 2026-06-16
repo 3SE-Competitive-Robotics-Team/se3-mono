@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import stat
 import threading
 import time
 from dataclasses import dataclass
@@ -77,7 +78,7 @@ class SimLoopRuntime:
 
     def _prepare_socket(self) -> None:
         if self.cfg.socket_path.exists():
-            os.unlink(self.cfg.socket_path)
+            _unlink_socket_path(self.cfg.socket_path, require_socket=True)
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         self._socket.bind(str(self.cfg.socket_path))
         self._socket.settimeout(0.1)
@@ -87,7 +88,7 @@ class SimLoopRuntime:
             self._socket.close()
         finally:
             if self.cfg.socket_path.exists():
-                os.unlink(self.cfg.socket_path)
+                _unlink_socket_path(self.cfg.socket_path, require_socket=False)
 
     def _recv_loop(self) -> None:
         while self._running:
@@ -104,3 +105,12 @@ class SimLoopRuntime:
                 continue
             with self._lock:
                 self.latest_target = target
+
+
+def _unlink_socket_path(path: Path, *, require_socket: bool) -> None:
+    mode = path.lstat().st_mode
+    if not stat.S_ISSOCK(mode):
+        if require_socket:
+            raise RuntimeError(f"refusing to unlink non-socket path: {path}")
+        return
+    os.unlink(path)

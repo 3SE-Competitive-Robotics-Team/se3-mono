@@ -113,8 +113,14 @@ struct MultiSender {
 
 impl Sender for MultiSender {
     fn send(&mut self, target: &PolicyTargetFrame) -> Result<(), SenderError> {
+        let mut first_err = None;
         for sender in &mut self.senders {
-            sender.send(target)?;
+            if let Err(err) = sender.send(target) {
+                first_err.get_or_insert(err);
+            }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
         }
         Ok(())
     }

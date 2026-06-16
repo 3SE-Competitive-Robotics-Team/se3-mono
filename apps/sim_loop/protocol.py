@@ -6,6 +6,7 @@ from dataclasses import dataclass
 SOF = b"\xA5\x5A"
 VERSION = 1
 MSG_TARGET = 0x02
+POLICY_TARGET_PAYLOAD_SIZE = struct.calcsize("<I4f2f")
 
 
 @dataclass(slots=True)
@@ -47,11 +48,16 @@ def unpack_policy_target(packet: bytes) -> PolicyTargetFrame:
     frame_len = 8 + payload_len + 2
     if len(packet) != frame_len:
         raise ValueError("packet length mismatch")
+    if payload_len != POLICY_TARGET_PAYLOAD_SIZE:
+        raise ValueError(f"unexpected payload length {payload_len}")
     expected_crc = struct.unpack("<H", packet[-2:])[0]
     actual_crc = crc16(packet[:-2])
     if expected_crc != actual_crc:
         raise ValueError("crc mismatch")
-    seq, *values = struct.unpack("<I4f2f", packet[8:-2])
+    try:
+        seq, *values = struct.unpack("<I4f2f", packet[8:-2])
+    except struct.error as exc:
+        raise ValueError("invalid payload encoding") from exc
     if seq & 0xFFFF != frame_seq:
         raise ValueError("frame seq mismatch")
     return PolicyTargetFrame(

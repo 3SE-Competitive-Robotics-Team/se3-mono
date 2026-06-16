@@ -1,4 +1,14 @@
-from sim_loop.protocol import PolicyTargetFrame, crc16, pack_policy_target, unpack_policy_target
+import struct
+
+from sim_loop.protocol import (
+    MSG_TARGET,
+    SOF,
+    VERSION,
+    PolicyTargetFrame,
+    crc16,
+    pack_policy_target,
+    unpack_policy_target,
+)
 
 
 def test_pack_policy_target_matches_rust_reference() -> None:
@@ -41,3 +51,16 @@ def test_unpack_rejects_wrong_message_type() -> None:
         assert "message type" in str(exc)
     else:
         raise AssertionError("wrong message type should be rejected")
+
+
+def test_unpack_rejects_wrong_payload_length_as_value_error() -> None:
+    payload = b"\x00" * 4
+    header = struct.pack("<2sBBHH", SOF, MSG_TARGET, VERSION, len(payload), 0)
+    packet = header + payload
+    packet += crc16(packet).to_bytes(2, "little")
+    try:
+        unpack_policy_target(packet)
+    except ValueError as exc:
+        assert "payload length" in str(exc)
+    else:
+        raise AssertionError("wrong payload length should be rejected")
