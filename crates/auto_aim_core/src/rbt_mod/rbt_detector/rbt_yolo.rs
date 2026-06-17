@@ -375,6 +375,7 @@ impl ArmorCorners {
             RbtImgPoint2::new_screen_pixel(self.rb.0, self.rb.1),
             RbtImgPoint2::new_screen_pixel(self.rt.0, self.rt.1),
             id,
+            armor_id,
             armor_type,
             neutral_color,
         )

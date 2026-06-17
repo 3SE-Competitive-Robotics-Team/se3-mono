@@ -12,6 +12,7 @@ pub struct SolvedArmor {
     pub enemy_yaw: f64,
     _base_yaw: f64,
     radius: f64,
+    enemy_center_xy: Option<na::Point2<f64>>,
 }
 
 // 在 solved_armor.rs 中添加
@@ -29,15 +30,21 @@ impl SolvedArmor {
             enemy_yaw,
             _base_yaw: base_yaw,
             radius,
+            enemy_center_xy: None,
         }
     }
 
-    pub fn update_measurement(&mut self, radius: f64) {
+    pub fn update_measurement(&mut self, radius: f64, enemy_center_xy: na::Point2<f64>) {
         self.radius = radius;
+        self.enemy_center_xy = Some(enemy_center_xy);
     }
 
     pub fn radius(&self) -> f64 {
         self.radius
+    }
+
+    pub fn enemy_center_xy(&self) -> Option<na::Point2<f64>> {
+        self.enemy_center_xy
     }
 
     pub fn observed_yaw_rad(&self) -> f64 {

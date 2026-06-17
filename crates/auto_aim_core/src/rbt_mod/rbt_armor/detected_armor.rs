@@ -1,11 +1,13 @@
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyArmorType;
+use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyId;
 
 /// 作为 Detector 的输出和 Solver 的输入
 #[derive(Debug, Clone)]
 pub struct DetectedArmor {
     key_points: [RbtImgPoint2; 5],
     _id: usize, // 当前帧画面唯一 id，用于区分每一块装甲板
+    armor_id: EnemyId,
     armor_type: EnemyArmorType,
     neutral_color: bool,
 }
@@ -18,8 +20,19 @@ impl DetectedArmor {
         rb: RbtImgPoint2,
         rt: RbtImgPoint2,
         id: usize,
+        armor_id: EnemyId,
     ) -> Self {
-        Self::with_type_and_color(center, lt, lb, rb, rt, id, EnemyArmorType::Small, false)
+        Self::with_type_and_color(
+            center,
+            lt,
+            lb,
+            rb,
+            rt,
+            id,
+            armor_id,
+            EnemyArmorType::Small,
+            false,
+        )
     }
 
     pub fn with_type_and_color(
@@ -29,12 +42,14 @@ impl DetectedArmor {
         rb: RbtImgPoint2,
         rt: RbtImgPoint2,
         id: usize,
+        armor_id: EnemyId,
         armor_type: EnemyArmorType,
         neutral_color: bool,
     ) -> Self {
         DetectedArmor {
             key_points: [center, lt, lb, rb, rt],
             _id: id,
+            armor_id,
             armor_type,
             neutral_color,
         }
@@ -51,6 +66,7 @@ impl DetectedArmor {
                 RbtImgPoint2::new_screen_pixel(corner[8], corner[9]),
             ],
             _id: id,
+            armor_id: EnemyId::Invalid,
             armor_type: EnemyArmorType::Small,
             neutral_color: false,
         }
@@ -87,6 +103,10 @@ impl DetectedArmor {
 
     pub fn armor_type(&self) -> EnemyArmorType {
         self.armor_type
+    }
+
+    pub fn armor_id(&self) -> EnemyId {
+        self.armor_id
     }
 
     pub fn neutral_color(&self) -> bool {

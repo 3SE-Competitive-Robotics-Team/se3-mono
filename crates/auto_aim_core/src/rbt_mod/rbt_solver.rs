@@ -187,7 +187,7 @@ pub fn enemys_solver(
             let dx = armor_x - enemy_center_xy.x;
             let dy = armor_y - enemy_center_xy.y;
             let radius = (dx * dx + dy * dy).sqrt();
-            solved_armor.update_measurement(radius);
+            solved_armor.update_measurement(radius, enemy_center_xy);
         }
 
         if rec.is_enabled() {

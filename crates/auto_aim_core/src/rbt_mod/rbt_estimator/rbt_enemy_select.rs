@@ -165,6 +165,7 @@ enemy_lost_wait_duration_ms = {enemy_lost_wait_duration_ms}
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y + 5.0),
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y - 5.0),
             0,
+            EnemyId::Hero1,
         );
 
         RbtSolvedResult {

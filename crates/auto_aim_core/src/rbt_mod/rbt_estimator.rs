@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::rbt_infra::rbt_cfg::EstimatorCfg;
+use crate::rbt_mod::rbt_armor::solved_armor::SolvedArmor;
 use crate::rbt_mod::rbt_solver::{RbtSolvedResult, RbtSolvedResults};
 
 use rbt_enemy_dynamic_model::EnemyId;
@@ -191,6 +192,8 @@ pub struct RbtEstimator {
     last_update_tp: Option<Instant>,
     fire_observation_hold_frames: usize,
     last_observed_armor_position_m: Option<na::Point3<f64>>,
+    tracked_armor_id: Option<EnemyId>,
+    tracked_armor_type: Option<rbt_enemy_dynamic_model::EnemyArmorType>,
     tracked_neutral_color_frames: usize,
     spin_count: usize,
     translation_count: usize,
@@ -209,6 +212,8 @@ impl RbtEstimator {
             last_update_tp: None,
             fire_observation_hold_frames: 0,
             last_observed_armor_position_m: None,
+            tracked_armor_id: None,
+            tracked_armor_type: None,
             tracked_neutral_color_frames: 0,
             spin_count: 0,
             translation_count: 0,
@@ -239,6 +244,18 @@ impl RbtEstimator {
         self.update_tracker(cfg, solved_enemy.as_ref(), dt_s, tracker_was_initialized);
         self.update_fire_observation_hold(cfg, solved_enemy.as_ref(), tracker_was_initialized);
         self.update_motion_state();
+    }
+
+    pub fn update_with_frame(
+        &mut self,
+        cfg: &EstimatorCfg,
+        selected_solution: &Option<RbtSolvedResult>,
+        solved_enemies: &RbtSolvedResults,
+    ) {
+        let matched_solution = selected_solution
+            .as_ref()
+            .map(|solution| self.match_solution_for_current_target(cfg, solution, solved_enemies));
+        self.update(cfg, &matched_solution);
     }
 
     pub fn snapshot(&self, _cfg: &EstimatorCfg) -> Option<EnemyTrackSnapshot> {
@@ -354,6 +371,8 @@ impl RbtEstimator {
     fn reset_fire_observation_hold(&mut self) {
         self.fire_observation_hold_frames = 0;
         self.last_observed_armor_position_m = None;
+        self.tracked_armor_id = None;
+        self.tracked_armor_type = None;
         self.tracked_neutral_color_frames = 0;
         self.spin_count = 0;
         self.translation_count = 0;
@@ -415,7 +434,7 @@ impl RbtEstimator {
         tracker_was_initialized: bool,
     ) {
         let armor_num = armor_num_for_enemy(self.enemy_id);
-        let observations = self.ypd_observations(solved, cfg.ignore_same_number_condition_switch);
+        let observations = self.ypd_observations(solved);
         let Some(preferred_index) = preferred_observation_index(&observations, cfg, armor_num)
         else {
             return;
@@ -431,6 +450,10 @@ impl RbtEstimator {
             );
             self.ypd_angle_tracker
                 .update_batch(&observations, Some(preferred_index), cfg);
+        }
+        if let Some(primary) = solved.armors.get(preferred_index) {
+            self.tracked_armor_id = Some(primary.armor_id());
+            self.tracked_armor_type = Some(primary.armor_type());
         }
     }
 
@@ -480,25 +503,58 @@ impl RbtEstimator {
         self.latest_tracker_snapshot = self.ypd_angle_tracker.snapshot();
     }
 
-    fn ypd_observations(
+    fn match_solution_for_current_target(
         &self,
-        solved: &RbtSolvedResult,
-        ignore_same_number: bool,
-    ) -> Vec<YpdObservation> {
+        cfg: &EstimatorCfg,
+        selected_solution: &RbtSolvedResult,
+        solved_enemies: &RbtSolvedResults,
+    ) -> RbtSolvedResult {
+        let tracked_id = self.tracked_armor_id;
+        let tracked_type = self.tracked_armor_type;
+        let mut armors = self.sorted_visible_armors(cfg, solved_enemies);
+        armors.retain(|armor| {
+            tracked_type.is_none_or(|tracked_type| armor.armor_type() == tracked_type)
+                && (cfg.ignore_same_number_condition_switch
+                    || tracked_id.is_none_or(|tracked_id| armor.armor_id() == tracked_id))
+        });
+
+        if armors.is_empty() {
+            return selected_solution.clone();
+        }
+
+        RbtSolvedResult {
+            coord: selected_solution.coord.clone(),
+            armors,
+        }
+    }
+
+    fn sorted_visible_armors(
+        &self,
+        cfg: &EstimatorCfg,
+        solved_enemies: &RbtSolvedResults,
+    ) -> Vec<SolvedArmor> {
+        let mut armors = Vec::new();
+        for solution in solved_enemies.values().flatten() {
+            armors.extend(solution.armors.iter().cloned());
+        }
+        armors.sort_by(|lhs, rhs| armor_observation_cmp(lhs, rhs, cfg));
+        armors
+    }
+
+    fn ypd_observations(&self, solved: &RbtSolvedResult) -> Vec<YpdObservation> {
         let center = solved.coord.to_xy();
         let armor_num = armor_num_for_enemy(self.enemy_id);
         let sign = tracker_radial_sign(armor_num);
-        let primary_type = solved.armors.first().map(|armor| armor.armor_type());
 
         solved
             .armors
             .iter()
-            .filter(|armor| ignore_same_number || Some(armor.armor_type()) == primary_type)
             .map(|armor| {
+                let armor_center = armor.enemy_center_xy().unwrap_or(center);
                 let position_vec = armor.pose().translation.vector;
                 let position = na::Point3::new(position_vec.x, position_vec.y, position_vec.z);
-                let dx = position.x - center.x;
-                let dy = position.y - center.y;
+                let dx = position.x - armor_center.x;
+                let dy = position.y - armor_center.y;
                 let radius_from_center = dx.hypot(dy);
                 let radius_hint = if armor.radius().is_finite() && armor.radius() > 1e-6 {
                     armor.radius()
@@ -527,6 +583,64 @@ impl RbtEstimator {
 
 fn armor_num_for_enemy(enemy_id: EnemyId) -> usize {
     if enemy_id == EnemyId::Outpost8 { 3 } else { 4 }
+}
+
+fn armor_observation_cmp(
+    lhs: &SolvedArmor,
+    rhs: &SolvedArmor,
+    cfg: &EstimatorCfg,
+) -> std::cmp::Ordering {
+    let lhs_center = lhs.center();
+    let rhs_center = rhs.center();
+    let lhs_distance = squared_image_distance(
+        lhs_center.x,
+        lhs_center.y,
+        cfg.image_center_x,
+        cfg.image_center_y,
+    );
+    let rhs_distance = squared_image_distance(
+        rhs_center.x,
+        rhs_center.y,
+        cfg.image_center_x,
+        cfg.image_center_y,
+    );
+
+    lhs_distance
+        .total_cmp(&rhs_distance)
+        .then_with(|| {
+            armor_number_sort_key(lhs.armor_id()).cmp(&armor_number_sort_key(rhs.armor_id()))
+        })
+        .then_with(|| {
+            armor_type_sort_key(lhs.armor_type()).cmp(&armor_type_sort_key(rhs.armor_type()))
+        })
+        .then_with(|| lhs_center.x.total_cmp(&rhs_center.x))
+        .then_with(|| lhs_center.y.total_cmp(&rhs_center.y))
+}
+
+fn squared_image_distance(x: f64, y: f64, center_x: f64, center_y: f64) -> f64 {
+    let dx = x - center_x;
+    let dy = y - center_y;
+    dx * dx + dy * dy
+}
+
+fn armor_number_sort_key(enemy_id: EnemyId) -> usize {
+    match enemy_id {
+        EnemyId::Hero1 => 1,
+        EnemyId::Engineer2 => 2,
+        EnemyId::Infantry3 => 3,
+        EnemyId::Infantry4 => 4,
+        EnemyId::Infantry5 => 5,
+        EnemyId::Sentry7 => 7,
+        EnemyId::Outpost8 => 9,
+        EnemyId::Invalid => usize::MAX,
+    }
+}
+
+fn armor_type_sort_key(armor_type: rbt_enemy_dynamic_model::EnemyArmorType) -> usize {
+    match armor_type {
+        rbt_enemy_dynamic_model::EnemyArmorType::Small => 0,
+        rbt_enemy_dynamic_model::EnemyArmorType::Large => 1,
+    }
 }
 
 fn tracker_radial_sign(armor_num: usize) -> f64 {
@@ -625,7 +739,7 @@ impl RbtHandlerPoll {
             self.estimators
                 .entry(enemy_id)
                 .or_insert_with(|| RbtEstimator::new(enemy_id))
-                .update(cfg, solved_enemy);
+                .update_with_frame(cfg, solved_enemy, &solved_enemies);
         }
     }
 
@@ -674,6 +788,7 @@ fire_armor_jump_block_frames = 3
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y + 5.0),
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y - 5.0),
             0,
+            EnemyId::Hero1,
         );
 
         RbtSolvedResult {
@@ -698,6 +813,7 @@ fire_armor_jump_block_frames = 3
                 RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y + 5.0),
                 RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y - 5.0),
                 idx,
+                EnemyId::Hero1,
             );
             let pose = Isometry3::translation(200.0 + idx as f64 * 20.0, idx as f64 * 200.0, 100.0);
             armors.push(SolvedArmor::new(
