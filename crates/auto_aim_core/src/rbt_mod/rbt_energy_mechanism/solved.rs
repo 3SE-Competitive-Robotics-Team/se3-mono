@@ -1,4 +1,4 @@
-use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
+use crate::rbt_infra::rbt_err::RbtResult;
 
 use super::detected::{EnergyMechanismMode, EnergyMechanismObject};
 
@@ -317,11 +317,6 @@ fn normalize_angle(mut angle: f64) -> f64 {
 
 fn to_f64(point: na::Point2<f32>) -> na::Point2<f64> {
     na::Point2::new(point.x as f64, point.y as f64)
-}
-
-#[allow(dead_code)]
-fn invalid_pose(message: impl Into<String>) -> RbtError {
-    RbtError::StringError(message.into())
 }
 
 #[cfg(test)]

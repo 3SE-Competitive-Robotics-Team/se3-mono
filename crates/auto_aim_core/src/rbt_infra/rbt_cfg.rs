@@ -115,37 +115,9 @@ pub struct EnergyMechanismDetectorCfg {
     pub engine_path: String,
     pub confidence_threshold: f32,
     pub nms_iou_threshold: f32,
-    #[serde(default = "default_energy_target_switch_missing_timeout_s")]
-    pub target_switch_missing_timeout_s: f64,
-    #[serde(default = "default_energy_lost_timeout_s")]
-    pub lost_timeout_s: f64,
-    #[serde(default = "default_energy_fire_gap_s")]
-    pub fire_gap_s: f64,
-    #[serde(default)]
-    pub yaw_offset_deg: f64,
-    #[serde(default)]
-    pub pitch_offset_deg: f64,
-    #[serde(default)]
-    pub predict_time_s: f64,
-    #[serde(default)]
-    pub pitch_velocity_lead_time_s: f64,
-}
-
-fn default_energy_target_switch_missing_timeout_s() -> f64 {
-    0.2
-}
-
-fn default_energy_lost_timeout_s() -> f64 {
-    0.35
-}
-
-fn default_energy_fire_gap_s() -> f64 {
-    0.2
 }
 
 /// 能量机关顶层配置：tracker / aimer / mpc 三段。
-///
-/// 检测相关参数继续放在 `EnergyMechanismDetectorCfg`；这里只覆盖跟踪、瞄准与控制。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct EnergyMechanismCfg {
     #[serde(default)]
@@ -383,12 +355,6 @@ pub struct EstimatorCfg {
     pub image_center_x: f64,
     #[serde(default = "default_image_center_y")]
     pub image_center_y: f64,
-    #[serde(default = "default_static_translation_speed_threshold_mps")]
-    pub static_translation_speed_threshold_mps: f64,
-    #[serde(default = "default_static_z_speed_threshold_mps")]
-    pub static_z_speed_threshold_mps: f64,
-    #[serde(default = "default_static_yaw_rate_threshold_rad_s")]
-    pub static_yaw_rate_threshold_rad_s: f64,
     #[serde(default = "default_fire_block_on_armor_jump")]
     pub fire_block_on_armor_jump: bool,
     #[serde(default = "default_fire_armor_jump_block_frames")]
@@ -415,8 +381,6 @@ pub struct EstimatorCfg {
     pub ypd_geometry_recovery_min_dr_variance: f64,
     #[serde(default = "default_ypd_geometry_recovery_min_h_variance")]
     pub ypd_geometry_recovery_min_h_variance: f64,
-    // top1_activate_w: f64,
-    // top2_activate_w: f64,
 }
 
 fn default_image_center_x() -> f64 {
@@ -425,18 +389,6 @@ fn default_image_center_x() -> f64 {
 
 fn default_image_center_y() -> f64 {
     192.0
-}
-
-fn default_static_translation_speed_threshold_mps() -> f64 {
-    0.25
-}
-
-fn default_static_z_speed_threshold_mps() -> f64 {
-    0.20
-}
-
-fn default_static_yaw_rate_threshold_rad_s() -> f64 {
-    0.35
 }
 
 fn default_fire_block_on_armor_jump() -> bool {
