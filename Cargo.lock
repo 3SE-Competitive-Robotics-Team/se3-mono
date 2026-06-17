@@ -1740,24 +1740,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "control"
-version = "0.1.0"
-dependencies = [
- "clap",
- "control_core",
- "locomotion_core",
-]
-
-[[package]]
-name = "control_core"
-version = "0.1.0"
-dependencies = [
- "libc",
- "locomotion_core",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "convert_case"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
