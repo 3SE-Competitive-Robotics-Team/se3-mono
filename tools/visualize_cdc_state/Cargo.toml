@@ -5,5 +5,4 @@ edition.workspace = true
 
 [dependencies]
 clap.workspace = true
-ctrlc.workspace = true
-locomotion_core = { path = "../../crates/locomotion_core" }
+locomotion_core.workspace = true

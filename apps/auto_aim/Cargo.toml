@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-lib = { package = "auto_aim_core", path = "../../crates/auto_aim_core" }
+auto_aim_core.workspace = true
 half.workspace = true
 image.workspace = true
 log.workspace = true

@@ -11,8 +11,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 // use crate::rbt_cfg::{self, DetectorConfig, RbtCfg};
-// use lib::rbt_mod::rbt_armor::ArmorKeyPoints;
-use lib::rbt_mod::{
+// use auto_aim_core::rbt_mod::rbt_armor::ArmorKeyPoints;
+use auto_aim_core::rbt_mod::{
     rbt_energy_mechanism::{
         EnergyMechanismControlInput, EnergyMechanismController, EnergyMechanismFrame,
         EnergyMechanismMode, EnergyMechanismSolvedFrame, EnergyMechanismTracker,
@@ -23,7 +23,7 @@ use lib::rbt_mod::{
     rbt_estimator::rbt_enemy_dynamic_model::EnemyId,
     rbt_solver::RbtSolvedResults,
 };
-use lib::{
+use auto_aim_core::{
     rbt_infra::rbt_cfg::{DetectorCfg, RbtCfg},
     rbt_infra::{
         rbt_global::{GENERIC_RBT_CFG, IS_RUNNING},
@@ -80,7 +80,7 @@ pub struct PlannerTrackSnapshot {
 #[derive(Debug, Clone)]
 pub struct EnergyMechanismTrackPacket {
     seq: u64,
-    target: Option<lib::rbt_mod::rbt_energy_mechanism::EnergyMechanismTrackSnapshot>,
+    target: Option<auto_aim_core::rbt_mod::rbt_energy_mechanism::EnergyMechanismTrackSnapshot>,
     publish_tp: Instant,
 }
 
@@ -281,7 +281,9 @@ fn enemy_rerun_name(enemy_id: EnemyId) -> &'static str {
     }
 }
 
-fn solved_enemy_center_position(enemy: &lib::rbt_mod::rbt_solver::RbtSolvedResult) -> [f32; 3] {
+fn solved_enemy_center_position(
+    enemy: &auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResult,
+) -> [f32; 3] {
     let center = enemy.coord.to_xy();
     let armor_z = enemy
         .armors
@@ -292,7 +294,7 @@ fn solved_enemy_center_position(enemy: &lib::rbt_mod::rbt_solver::RbtSolvedResul
 }
 
 fn solved_enemy_armor_positions(
-    enemy: &lib::rbt_mod::rbt_solver::RbtSolvedResult,
+    enemy: &auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResult,
 ) -> Vec<[f32; 3]> {
     enemy
         .armors
@@ -478,7 +480,7 @@ fn energy_position_mm(x: f64, y: f64, z: f64) -> [f32; 3] {
 fn log_rerun_energy_mechanism_snapshot(
     rec: &rr::RecordingStream,
     seq: u64,
-    target: Option<lib::rbt_mod::rbt_energy_mechanism::EnergyMechanismTrackSnapshot>,
+    target: Option<auto_aim_core::rbt_mod::rbt_energy_mechanism::EnergyMechanismTrackSnapshot>,
     center_visible: &mut bool,
     blade_center_visible: &mut bool,
     horizon_visible: &mut bool,
@@ -1070,7 +1072,7 @@ pub fn post_process(
                         .filter_map(|result| result.as_ref())
                         .map(|result| result.armors.len())
                         .sum::<usize>();
-                    Ok::<_, lib::rbt_infra::rbt_err::RbtError>((
+                    Ok::<_, auto_aim_core::rbt_infra::rbt_err::RbtError>((
                         frame,
                         solved_enemies,
                         started.elapsed(),
@@ -1308,7 +1310,11 @@ pub fn energy_mechanism_post_process(
                     &post_cfg,
                 );
                 let solved = solve_energy_mechanism(frame.mode(), objects, &cam_k)?;
-                Ok::<_, lib::rbt_infra::rbt_err::RbtError>((solved, stats, started.elapsed()))
+                Ok::<_, auto_aim_core::rbt_infra::rbt_err::RbtError>((
+                    solved,
+                    stats,
+                    started.elapsed(),
+                ))
             })
             .await;
 

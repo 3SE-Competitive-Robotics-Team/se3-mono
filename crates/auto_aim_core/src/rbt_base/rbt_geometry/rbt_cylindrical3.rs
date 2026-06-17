@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RbtCylindricalPoint3 {
     pub rho: f64,     // 相对与世界坐标系原点的距离
     pub theta_d: f64, // 在世界坐标系下的角度
@@ -20,5 +20,10 @@ impl RbtCylindricalPoint3 {
         let rho = (x * x + y * y).sqrt();
         let theta_d = y.atan2(x).to_degrees();
         Self::new(rho, theta_d, z)
+    }
+
+    pub fn to_xyz(&self) -> na::Point3<f64> {
+        let theta = self.theta_d.to_radians();
+        na::Point3::new(self.rho * theta.cos(), self.rho * theta.sin(), self.z)
     }
 }
