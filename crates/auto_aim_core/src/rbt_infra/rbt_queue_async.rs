@@ -20,6 +20,7 @@
 //! every intermediate frame.
 
 use crossbeam_queue::ArrayQueue;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
 
 /// 异步单生产者单消费者队列实现
@@ -29,6 +30,7 @@ use tokio::sync::Notify;
 pub struct RbtSPSCQueueAsync<T> {
     queue: ArrayQueue<T>,
     notify: Notify,
+    dropped: AtomicU64,
 }
 
 impl<T> RbtSPSCQueueAsync<T> {
@@ -44,6 +46,7 @@ impl<T> RbtSPSCQueueAsync<T> {
         RbtSPSCQueueAsync {
             queue: ArrayQueue::new(capacity),
             notify: Notify::new(),
+            dropped: AtomicU64::new(0),
         }
     }
 
@@ -52,7 +55,9 @@ impl<T> RbtSPSCQueueAsync<T> {
     /// 该行为对齐 `vivsionn/src/ArmorDetector/fixed_queue.hpp` 的
     /// `FixedSafeQueue::push`，用于视觉流水线中“保最新帧、控延迟”的队列。
     pub fn push_latest(&self, item: T) {
-        let _dropped_oldest = self.queue.force_push(item);
+        if self.queue.force_push(item).is_some() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
         self.notify.notify_one();
     }
 
@@ -101,6 +106,11 @@ impl<T> RbtSPSCQueueAsync<T> {
     /// 队列为空时返回 true
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    /// 自创建以来累计丢弃的元素数量。
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// 检查当前队列的容量

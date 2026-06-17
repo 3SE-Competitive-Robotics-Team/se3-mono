@@ -39,7 +39,9 @@ use lib::{
             ShotBuffMode, ShotMode, TaskMode,
         },
         rbt_detector::{
-            rbt_frame::{ARMOR_OUTPUT_COLS, ARMOR_OUTPUT_ROWS, RbtFrame, RbtFrameStage},
+            rbt_frame::{
+                ARMOR_OUTPUT_COLS, ARMOR_OUTPUT_ROWS, GimbalPose, RbtFrame, RbtFrameStage,
+            },
             rbt_yolo::{
                 ArmorYoloDecodeStats, ArmorYoloPostprocessCfg, decode_armor_output_with_stats,
                 preprocess_letterbox_f16,
@@ -272,6 +274,7 @@ fn enemy_rerun_name(enemy_id: EnemyId) -> &'static str {
         EnemyId::Engineer2 => "engineer2",
         EnemyId::Infantry3 => "infantry3",
         EnemyId::Infantry4 => "infantry4",
+        EnemyId::Infantry5 => "infantry5",
         EnemyId::Sentry7 => "sentry7",
         EnemyId::Outpost8 => "outpost8",
         EnemyId::Invalid => "invalid",
@@ -571,7 +574,6 @@ pub fn video_input_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("..")
         .join("videos")
         .join(DEFAULT_VIDEO_FILE)
 }
@@ -666,7 +668,10 @@ fn run_video_preprocess_loop(
         cfg.general_cfg.bullet_speed,
         cfg.general_cfg.offline_task_mode(),
     );
-    feedback_queue.push_latest(offline_feedback);
+    let mut latest_feedback = offline_feedback;
+    feedback_queue.push_latest(latest_feedback);
+
+    let mut dropped_energy_frames: u64 = 0;
 
     loop {
         if !IS_RUNNING.load(Ordering::SeqCst) {
@@ -679,7 +684,10 @@ fn run_video_preprocess_loop(
             break;
         };
         summary.read_total += read_started.elapsed();
-        feedback_queue.push_latest(offline_feedback);
+        if let Some(feedback) = feedback_queue.try_pop_latest() {
+            latest_feedback = feedback;
+        }
+        feedback_queue.push_latest(latest_feedback);
         let frame_img = frame_img.rotate180();
 
         let route_state = runtime_router.state();
@@ -692,11 +700,18 @@ fn run_video_preprocess_loop(
             summary.preprocess_total += preprocess_started.elapsed();
             rbt_frame.set_gray_frame(gray_frame);
             rbt_frame.set_letterbox_transform(transform);
+            rbt_frame.set_gimbal_pose(GimbalPose::from_feedback(latest_feedback));
             rbt_frame.set_id(frame_id);
             rbt_frame.set_state(RbtFrameStage::Pre);
             queue.push_latest(rbt_frame);
         } else if route_state.energy_mechanism_active() {
             let Some(mode) = EnergyMechanismMode::from_task_mode(route_state.task_mode) else {
+                dropped_energy_frames = dropped_energy_frames.wrapping_add(1);
+                if dropped_energy_frames.is_multiple_of(100) {
+                    error!(
+                        "pre_process: dropped {dropped_energy_frames} energy mechanism frames (task mode has no valid energy mechanism mapping)"
+                    );
+                }
                 continue;
             };
             frame_id = frame_id.wrapping_add(1);
@@ -714,6 +729,12 @@ fn run_video_preprocess_loop(
 
         if frame_id == 1 || frame_id.is_multiple_of(60) {
             info!("pre_process: pushed video frame {frame_id}");
+        }
+        if frame_id.is_multiple_of(100) {
+            let drops = energy_queue.dropped_count();
+            if drops > 0 {
+                error!("pre_process: energy_pre_infer queue dropped {drops} frames (capacity=1)");
+            }
         }
     }
 
@@ -1037,7 +1058,13 @@ pub fn post_process(
                     );
                     let decoded_armor_count = armors.values().map(Vec::len).sum::<usize>();
                     let decoded_enemy_count = armors.len();
-                    let solved_enemies = enemys_solver(armors, &cam_k, frame.gray_frame(), &rec)?;
+                    let solved_enemies = enemys_solver(
+                        armors,
+                        &cam_k,
+                        frame.gray_frame(),
+                        frame.gimbal_pose(),
+                        &rec,
+                    )?;
                     let solved_armor_count = solved_enemies
                         .values()
                         .filter_map(|result| result.as_ref())
@@ -1241,6 +1268,7 @@ pub fn energy_mechanism_post_process(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut post_count = 0_u64;
+        let mut solve_errors: u64 = 0;
         let mut post_total = Duration::ZERO;
         let mut decode_stats = EnergyMechanismYoloDecodeStats::default();
         loop {
@@ -1288,6 +1316,14 @@ pub fn energy_mechanism_post_process(
                 Ok(Ok((solved, stats, post_elapsed))) => {
                     post_count = post_count.wrapping_add(1);
                     post_total += post_elapsed;
+                    if post_count.is_multiple_of(100) {
+                        let drops = solved_queue.dropped_count();
+                        if drops > 0 {
+                            error!(
+                                "energy_mechanism_post_process: solved_queue dropped {drops} frames (capacity=1)"
+                            );
+                        }
+                    }
                     decode_stats.anchors += stats.anchors;
                     decode_stats.confidence_pass += stats.confidence_pass;
                     decode_stats.class_pass += stats.class_pass;
@@ -1303,7 +1339,12 @@ pub fn energy_mechanism_post_process(
                     }
                 }
                 Ok(Err(err)) => {
-                    warn!("energy_mechanism_post_process: failed to solve frame {id}: {err}")
+                    solve_errors = solve_errors.wrapping_add(1);
+                    if solve_errors.is_multiple_of(10) {
+                        error!(
+                            "energy_mechanism_post_process: failed to solve frame {id} ({solve_errors} total solve errors): {err}"
+                        );
+                    }
                 }
                 Err(err) => {
                     warn!("energy_mechanism_post_process: worker join failed for frame {id}: {err}")
@@ -1322,7 +1363,6 @@ pub fn energy_mechanism_estimate_process(
     completion: RuntimePipelineCompletion,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(2));
         let tracker_cfg = GENERIC_RBT_CFG
             .read()
             .unwrap()
@@ -1337,7 +1377,6 @@ pub fn energy_mechanism_estimate_process(
         let mut horizon_visible = false;
         let mut last_transition_seq = runtime_router.state().transition_seq;
         loop {
-            ticker.tick().await;
             if completion.energy_post_done() && solved_queue.is_empty() {
                 info!("energy_mechanism_estimate_process: stopping");
                 break;
@@ -1351,19 +1390,25 @@ pub fn energy_mechanism_estimate_process(
                 last_transition_seq = route_state.transition_seq;
             }
             if !route_state.energy_mechanism_active() {
+                tokio::time::sleep(Duration::from_millis(PIPELINE_POP_TIMEOUT_MS)).await;
                 continue;
             }
 
             let Some(mode) = EnergyMechanismMode::from_task_mode(route_state.task_mode) else {
+                tokio::time::sleep(Duration::from_millis(PIPELINE_POP_TIMEOUT_MS)).await;
                 continue;
             };
-            let solved = solved_queue
-                .try_pop_latest()
-                .unwrap_or(EnergyMechanismSolvedFrame {
-                    mode,
-                    target: None,
-                    candidates: Vec::new(),
-                });
+            let Some(solved) = pop_latest_with_timeout(
+                &solved_queue,
+                Duration::from_millis(PIPELINE_POP_TIMEOUT_MS),
+            )
+            .await
+            else {
+                continue;
+            };
+            if solved.mode != mode {
+                continue;
+            }
             snapshot_seq = snapshot_seq.wrapping_add(1);
             let target = tracker.update(mode, solved.target.as_ref());
             if let Err(err) = log_rerun_energy_mechanism_snapshot(
@@ -1381,12 +1426,20 @@ pub fn energy_mechanism_estimate_process(
                 target,
                 publish_tp: Instant::now(),
             });
+            if snapshot_seq.is_multiple_of(100) {
+                let drops = track_queue.dropped_count();
+                if drops > 0 {
+                    error!(
+                        "energy_mechanism_estimate_process: track_queue dropped {drops} frames (capacity=1)"
+                    );
+                }
+            }
         }
         completion.mark_energy_estimate_done();
     })
 }
 
-/// 500Hz 估计器，将当前选中目标快照送入发控。
+/// 按最新视觉解算结果推进估计器，将当前选中目标快照送入发控。
 pub fn estimate_process(
     solved_queue: Arc<RbtSPSCQueueAsync<RbtSolvedResults>>,
     track_queue: Arc<RbtSPSCQueueAsync<PlannerTrackSnapshot>>,
@@ -1395,7 +1448,6 @@ pub fn estimate_process(
     completion: RuntimePipelineCompletion,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(2));
         let mut estimator_poll = RbtHandlerPoll::new();
         let mut snapshot_seq = 0_u64;
         let mut raw_visible = false;
@@ -1403,7 +1455,6 @@ pub fn estimate_process(
         let mut last_transition_seq = runtime_router.state().transition_seq;
         let estimator_cfg = GENERIC_RBT_CFG.read().unwrap().estimator_cfg.clone();
         loop {
-            ticker.tick().await;
             if completion.armor_post_done() && solved_queue.is_empty() {
                 info!("estimate_process: Stopping processing as IS_RUNNING is false");
                 break;
@@ -1415,10 +1466,18 @@ pub fn estimate_process(
                 last_transition_seq = route_state.transition_seq;
             }
             if !route_state.armor_pipeline_active() {
+                tokio::time::sleep(Duration::from_millis(PIPELINE_POP_TIMEOUT_MS)).await;
                 continue;
             }
 
-            let enemys = solved_queue.try_pop_latest().unwrap_or_default();
+            let Some(enemys) = pop_latest_with_timeout(
+                &solved_queue,
+                Duration::from_millis(PIPELINE_POP_TIMEOUT_MS),
+            )
+            .await
+            else {
+                continue;
+            };
             let raw_enemies = if rec.is_enabled() {
                 Some(enemys.clone())
             } else {
@@ -1604,10 +1663,14 @@ pub fn control_loop_250hz(
                 .map(|snapshot| snapshot.publish_tp.elapsed().as_secs_f64() * 1_000.0)
                 .unwrap_or(f64::INFINITY);
             let stale = snapshot_age_ms > FIRE_CONTROL_SNAPSHOT_STALE_MS;
+            let target = latest_snapshot.as_ref().and_then(|snapshot| {
+                snapshot.target.map(|mut target| {
+                    target.state_age_s = (snapshot_age_ms * 1e-3).clamp(0.0, 0.2);
+                    target
+                })
+            });
             let control_data = fire_control.update(FireControlInput {
-                target: latest_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.target),
+                target,
                 feedback,
                 feedback_fresh,
                 dt_s,
@@ -1780,6 +1843,16 @@ async fn pop_latest_until_running<T>(queue: &RbtSPSCQueueAsync<T>, timeout: Dura
             return None;
         }
     }
+}
+
+async fn pop_latest_with_timeout<T>(queue: &RbtSPSCQueueAsync<T>, timeout: Duration) -> Option<T> {
+    if let Some(item) = queue.try_pop_latest() {
+        return Some(item);
+    }
+    tokio::time::timeout(timeout, queue.pop_latest())
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]

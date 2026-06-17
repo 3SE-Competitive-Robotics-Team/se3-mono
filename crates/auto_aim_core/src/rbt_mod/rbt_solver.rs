@@ -7,11 +7,15 @@ use crate::rbt_base::rbt_geometry::{
 use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
 use crate::rbt_mod::rbt_armor::solved_armor::SolvedArmor;
-use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyId;
+use crate::rbt_mod::rbt_detector::rbt_frame::GimbalPose;
+use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyArmorType, EnemyId};
 use image::GrayImage;
 use log::{debug, warn};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+
+const DEFAULT_SINGLE_ARMOR_RADIUS_MM: f64 = 200.0;
+const OUTPOST_SINGLE_ARMOR_RADIUS_MM: f64 = 276.5;
 
 #[derive(Debug, Clone)]
 pub struct RbtSolver {
@@ -43,6 +47,7 @@ impl Default for RbtSolvedResults {
         result.insert(EnemyId::Engineer2, None);
         result.insert(EnemyId::Infantry3, None);
         result.insert(EnemyId::Infantry4, None);
+        result.insert(EnemyId::Infantry5, None);
         result.insert(EnemyId::Sentry7, None);
         result.insert(EnemyId::Outpost8, None);
         RbtSolvedResults { inner: result }
@@ -78,6 +83,7 @@ pub fn enemys_solver(
     detector_result: HashMap<EnemyId, Vec<DetectedArmor>>,
     cam_k: &na::Matrix3<f64>,
     gray_frame: Option<&GrayImage>,
+    gimbal_pose: GimbalPose,
     rec: &rr::RecordingStream,
 ) -> RbtResult<RbtSolvedResults> {
     // 0. 构建全单位解算结果，内部是一个HashMap
@@ -93,15 +99,48 @@ pub fn enemys_solver(
 
         // 1.2 针对每一块装甲板求解pnp
         let mut enemy_solved_armors = Vec::with_capacity(detected_enemy_armors_num);
-        let pnp_solver = ArmorPnpSolver::new().ok_or(RbtError::StringError(
-            "Failed to create ArmorPnpSolver Instant".to_string(),
+        let small_pnp_solver = ArmorPnpSolver::new_small().ok_or(RbtError::StringError(
+            "Failed to create small ArmorPnpSolver instance".to_string(),
+        ))?;
+        let large_pnp_solver = ArmorPnpSolver::new_large().ok_or(RbtError::StringError(
+            "Failed to create large ArmorPnpSolver instance".to_string(),
         ))?;
         for armor in enemy_armors.into_iter() {
             let armor_key_points_na = armor.corner_points().map(|p| p.into());
+            let pnp_solver = match armor.armor_type() {
+                EnemyArmorType::Small => &small_pnp_solver,
+                EnemyArmorType::Large => &large_pnp_solver,
+            };
             if let Some(camera_pose) =
                 pnp_solver.solve_with_gray(&armor_key_points_na, cam_k, gray_frame)
             {
-                let solved_armor = SolvedArmor::new(armor, camera_pose, 0.0, 0.0, 0.0);
+                let camera_yaw_rad = camera_pose
+                    .rotation
+                    .to_rotation_matrix()
+                    .matrix()
+                    .column(2)
+                    .xy()
+                    .y
+                    .atan2(
+                        camera_pose
+                            .rotation
+                            .to_rotation_matrix()
+                            .matrix()
+                            .column(2)
+                            .xy()
+                            .x,
+                    );
+                let observed_yaw_rad = if enemy_id == EnemyId::Outpost8 {
+                    outpost_yaw_in_gimbal_frame(
+                        camera_pose.rotation.to_rotation_matrix().matrix(),
+                        gimbal_pose.pitch_rad(),
+                        gimbal_pose.yaw_rad(),
+                    )
+                    .unwrap_or_else(|| camera_yaw_rad - gimbal_pose.yaw_rad())
+                } else {
+                    camera_yaw_rad - gimbal_pose.yaw_rad()
+                };
+                let solved_armor = SolvedArmor::new(armor, camera_pose, observed_yaw_rad, 0.0, 0.0);
                 enemy_solved_armors.push(solved_armor);
             } else {
                 warn!("PnP solving rejected an armor for {enemy_id:?}");
@@ -133,7 +172,8 @@ pub fn enemys_solver(
                 }
             })
             .collect::<Vec<RbtLine2>>();
-        let Some(enemy_center_xy) = solve_enemy_center(&armors_line_2d) else {
+        let single_armor_radius = single_armor_radius_for_enemy(enemy_id);
+        let Some(enemy_center_xy) = solve_enemy_center(&armors_line_2d, single_armor_radius) else {
             warn!("enemys_solver: failed to solve enemy center for {enemy_id:?}");
             continue;
         };
@@ -147,7 +187,7 @@ pub fn enemys_solver(
             let dx = armor_x - enemy_center_xy.x;
             let dy = armor_y - enemy_center_xy.y;
             let radius = (dx * dx + dy * dy).sqrt();
-            solved_armor.update_measurement(radius);
+            solved_armor.update_measurement(radius, enemy_center_xy);
         }
 
         if rec.is_enabled() {
@@ -189,13 +229,19 @@ pub fn enemys_solver(
     Ok(enemys)
 }
 
-fn solve_enemy_center(armors_line_2d: &[RbtLine2]) -> Option<na::Point2<f64>> {
+fn solve_enemy_center(
+    armors_line_2d: &[RbtLine2],
+    single_armor_radius_mm: f64,
+) -> Option<na::Point2<f64>> {
     let armors_line_num = armors_line_2d.len();
     if armors_line_num == 0 {
         warn!("未能成功解算出装甲板，跳过");
         None
     } else if armors_line_num == 1 {
-        Some(handle_single_armor(&armors_line_2d[0]))
+        Some(handle_single_armor(
+            &armors_line_2d[0],
+            single_armor_radius_mm,
+        ))
     } else if armors_line_num == 2 {
         handle_multi_armor(armors_line_2d)
     } else {
@@ -206,8 +252,12 @@ fn solve_enemy_center(armors_line_2d: &[RbtLine2]) -> Option<na::Point2<f64>> {
 
 /// 处理只看到一块装甲板的情况
 /// 使用估计出的半径进行中心求解
-fn handle_single_armor(armors_line_2d: &RbtLine2) -> na::Point2<f64> {
-    let r = 200.0;
+fn handle_single_armor(armors_line_2d: &RbtLine2, radius_mm: f64) -> na::Point2<f64> {
+    let r = if radius_mm.is_finite() && radius_mm > 0.0 {
+        radius_mm
+    } else {
+        DEFAULT_SINGLE_ARMOR_RADIUS_MM
+    };
     armors_line_2d.point - armors_line_2d.direction * r
 }
 
@@ -215,4 +265,28 @@ fn handle_single_armor(armors_line_2d: &RbtLine2) -> na::Point2<f64> {
 /// 使用反向延长线求解中心
 fn handle_multi_armor(armors_line_2d: &[RbtLine2]) -> Option<na::Point2<f64>> {
     find_intersection(&armors_line_2d[0], &armors_line_2d[1])
+}
+
+fn single_armor_radius_for_enemy(enemy_id: EnemyId) -> f64 {
+    if enemy_id == EnemyId::Outpost8 {
+        OUTPOST_SINGLE_ARMOR_RADIUS_MM
+    } else {
+        DEFAULT_SINGLE_ARMOR_RADIUS_MM
+    }
+}
+
+fn outpost_yaw_in_gimbal_frame(
+    armor_rot_cam: &na::Matrix3<f64>,
+    gimbal_pitch_rad: f64,
+    gimbal_yaw_rad: f64,
+) -> Option<f64> {
+    if !armor_rot_cam.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let normal_cam = armor_rot_cam.column(2).into_owned();
+    let r_yaw = na::Rotation3::from_axis_angle(&na::Vector3::y_axis(), gimbal_yaw_rad);
+    let r_pitch = na::Rotation3::from_axis_angle(&na::Vector3::x_axis(), gimbal_pitch_rad);
+    let normal_gimbal = (r_yaw * r_pitch) * normal_cam;
+    let yaw = normal_gimbal.x.atan2(normal_gimbal.z);
+    yaw.is_finite().then_some(yaw)
 }

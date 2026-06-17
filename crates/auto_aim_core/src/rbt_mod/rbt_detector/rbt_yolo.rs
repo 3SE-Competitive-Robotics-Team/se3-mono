@@ -9,6 +9,7 @@ use image::imageops::FilterType;
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
+use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
 
 pub const LETTERBOX_PAD_VALUE: f32 = 0.0;
@@ -179,10 +180,6 @@ pub fn decode_armor_output_with_stats(
             continue;
         };
         stats.color_pass += 1;
-        if is_self_color(color, cfg.self_fraction) {
-            continue;
-        }
-        stats.self_color_pass += 1;
 
         let Some(armor_id) = decode_number(argmax(&row, 13, 22)) else {
             continue;
@@ -205,6 +202,7 @@ pub fn decode_armor_output_with_stats(
             armor_id,
             score,
             corners,
+            color,
         });
     }
 
@@ -214,18 +212,23 @@ pub fn decode_armor_output_with_stats(
     for (id, candidate) in nms_candidates
         .into_iter()
         .filter(|candidate| {
-            let keep = candidate.score >= cfg.confidence_threshold;
-            if keep {
-                stats.confidence_pass += 1;
+            if is_self_color(candidate.color, cfg.self_fraction) {
+                return false;
             }
-            keep
+            stats.self_color_pass += 1;
+            stats.confidence_pass += 1;
+            true
         })
         .enumerate()
     {
         armors
             .entry(candidate.armor_id)
             .or_insert_with(Vec::new)
-            .push(candidate.corners.to_detected_armor(id));
+            .push(
+                candidate
+                    .corners
+                    .to_detected_armor(id, candidate.armor_id, candidate.color),
+            );
     }
 
     (armors, stats)
@@ -277,7 +280,8 @@ fn decode_number(num_idx: usize) -> Option<EnemyId> {
         2 => Some(EnemyId::Engineer2),
         3 => Some(EnemyId::Infantry3),
         4 => Some(EnemyId::Infantry4),
-        6..=8 => Some(EnemyId::Outpost8),
+        5 => Some(EnemyId::Infantry5),
+        6 => Some(EnemyId::Outpost8),
         _ => None,
     }
 }
@@ -288,6 +292,7 @@ struct ArmorCandidate {
     armor_id: EnemyId,
     score: f32,
     corners: ArmorCorners,
+    color: ArmorYoloColor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -350,15 +355,32 @@ impl ArmorCorners {
         (x, y)
     }
 
-    fn to_detected_armor(self, id: usize) -> DetectedArmor {
+    fn to_detected_armor(
+        self,
+        id: usize,
+        armor_id: EnemyId,
+        color: ArmorYoloColor,
+    ) -> DetectedArmor {
         let center = self.center();
+        let armor_type = match armor_id {
+            EnemyId::Hero1 => {
+                crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyArmorType::Large
+            }
+            _ => crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyArmorType::Small,
+        };
+        let neutral_color = matches!(color, ArmorYoloColor::Gray | ArmorYoloColor::Purple);
         DetectedArmor::new(
             RbtImgPoint2::new_screen_pixel(center.0, center.1),
             RbtImgPoint2::new_screen_pixel(self.lt.0, self.lt.1),
             RbtImgPoint2::new_screen_pixel(self.lb.0, self.lb.1),
             RbtImgPoint2::new_screen_pixel(self.rb.0, self.rb.1),
             RbtImgPoint2::new_screen_pixel(self.rt.0, self.rt.1),
-            id,
+            DetectedArmorMeta {
+                frame_id: id,
+                armor_id,
+                armor_type,
+                neutral_color,
+            },
         )
     }
 }
