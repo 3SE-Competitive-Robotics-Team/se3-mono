@@ -49,3 +49,20 @@ cargo test --locked --workspace --all-targets
 ```
 
 仿真循环通过根目录的 Python 启动脚本运行，命令为 `uv run se3-sim-loop --model <MJCF>`，根目录 `pyproject.toml` 管理依赖和脚本入口。
+
+## prek pre-commit
+
+提交前自动运行 CI 检查，避免推送后 CI 报错：
+
+```bash
+# 安装 prek（仅首次）
+brew install prek
+
+# 在仓库内安装 git hook
+prek install
+
+# 手动运行所有检查
+prek run --all-files
+```
+
+`prek.toml` 已配置以下检查，与 CI 保持一致：`cargo fmt`、`cargo clippy`、`cargo test`、`ruff check`、`pytest`。
