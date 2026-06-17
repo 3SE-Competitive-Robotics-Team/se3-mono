@@ -5,5 +5,4 @@ edition.workspace = true
 
 [dependencies]
 clap.workspace = true
-ctrlc.workspace = true
 locomotion_core.workspace = true
