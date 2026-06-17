@@ -109,6 +109,14 @@ pub struct FireControlController {
     last_stats: FireControlStats,
 }
 
+struct DynamicGateInput {
+    control_yaw_deg: f64,
+    control_pitch_deg: f64,
+    tolerance_deg: f64,
+    gate_mcu: bool,
+    require_impact_angle_gate: bool,
+}
+
 impl FireControlController {
     pub fn new() -> RbtResult<Self> {
         let fire_gate = FireGateConfig::default();
@@ -401,15 +409,16 @@ impl FireControlController {
             plan,
             input,
             output,
-            control_yaw_deg,
-            control_pitch_deg,
-            tolerance_deg,
-            gate_mcu,
-            require_impact_angle_gate,
+            DynamicGateInput {
+                control_yaw_deg,
+                control_pitch_deg,
+                tolerance_deg,
+                gate_mcu,
+                require_impact_angle_gate,
+            },
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dynamic_gate_state(
         &self,
         target: &EnemyTrackSnapshot,
@@ -417,11 +426,7 @@ impl FireControlController {
         plan: &YawPlan,
         input: FireControlInput,
         output: &SecondOrderPositionMpcOutput,
-        control_yaw_deg: f64,
-        control_pitch_deg: f64,
-        tolerance_deg: f64,
-        gate_mcu: bool,
-        require_impact_angle_gate: bool,
+        gate: DynamicGateInput,
     ) -> TargetControlState {
         let impact_ref_deg: Vec<f64> = plan
             .impact_delta_angle_ref_rad
@@ -432,11 +437,11 @@ impl FireControlController {
             predicted_yaw_deg: &output.predicted_yaw_deg,
             reference_yaw_deg: &output.reference_yaw_deg,
             impact_delta_angle_ref_deg: Some(&impact_ref_deg),
-            tolerance_deg,
+            tolerance_deg: gate.tolerance_deg,
             first_slot_time_s: self.shot_phase.first_slot_time_s(),
             target_omega_rad_s: planner_target.state()[7],
-            require_impact_angle_gate,
-            mcu_fire_permit: gate_mcu,
+            require_impact_angle_gate: gate.require_impact_angle_gate,
+            mcu_fire_permit: gate.gate_mcu,
         });
         let first_slot_error_deg = gate_result.first_slot_error_deg.unwrap_or(f64::NAN);
         let yaw_error_deg = gate_result
@@ -444,32 +449,33 @@ impl FireControlController {
             .unwrap_or(output.preview_tracking_error_deg)
             .abs();
         let gate_preview = if first_slot_error_deg.is_finite() {
-            first_slot_error_deg < tolerance_deg
+            first_slot_error_deg < gate.tolerance_deg
         } else {
-            output.preview_tracking_valid && output.preview_tracking_error_deg < tolerance_deg
+            output.preview_tracking_valid && output.preview_tracking_error_deg < gate.tolerance_deg
         };
-        let gate_impact = if require_impact_angle_gate {
+        let gate_impact = if gate.require_impact_angle_gate {
             gate_result
                 .first_slot_impact
                 .is_some_and(|impact| impact.in_window)
         } else {
             true
         };
-        let pitch_error_deg = angle_diff_deg(control_pitch_deg, input.feedback.gimbal_pitch as f64);
+        let pitch_error_deg =
+            angle_diff_deg(gate.control_pitch_deg, input.feedback.gimbal_pitch as f64);
         let gate_follow =
             self.fire_gate
-                .follow_is_ready(yaw_error_deg, pitch_error_deg, tolerance_deg);
+                .follow_is_ready(yaw_error_deg, pitch_error_deg, gate.tolerance_deg);
         let hold_slot_count = self.shot_phase.config().auto_hold_slot_count.max(1);
 
         TargetControlState {
-            control_yaw_deg,
-            control_pitch_deg,
-            tolerance_deg,
+            control_yaw_deg: gate.control_yaw_deg,
+            control_pitch_deg: gate.control_pitch_deg,
+            tolerance_deg: gate.tolerance_deg,
             yaw_error_deg,
             pitch_error_deg,
             viable_slot_count: gate_result.viable_slot_count,
             first_slot_error_deg,
-            gate_mcu,
+            gate_mcu: gate.gate_mcu,
             gate_preview,
             gate_impact,
             gate_slot: gate_result.viable_slot_count >= hold_slot_count,
@@ -477,9 +483,9 @@ impl FireControlController {
             gate_observation: target.observation_stable,
             gate_follow,
             gate_command_stable: self.command_is_stable(
-                control_yaw_deg,
-                control_pitch_deg,
-                tolerance_deg,
+                gate.control_yaw_deg,
+                gate.control_pitch_deg,
+                gate.tolerance_deg,
             ),
             planner_active: true,
             preview_mpc_active: true,

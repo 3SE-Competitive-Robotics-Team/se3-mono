@@ -317,10 +317,12 @@ impl RecoveryRuntime {
                 &obs,
                 &action,
                 flags,
-                Some(policy_inference_ms),
-                Some(0.0),
-                loop_started,
-                None,
+                TelemetryTiming {
+                    policy_inference_ms: Some(policy_inference_ms),
+                    state_age_s: Some(0.0),
+                    loop_started,
+                    write_ms: None,
+                },
             )?;
             self.maybe_print();
         }
@@ -427,10 +429,12 @@ impl RecoveryRuntime {
                         &obs,
                         &action,
                         flags,
-                        policy_inference_ms,
-                        Some(age_s),
-                        loop_started,
-                        Some(write_ms),
+                        TelemetryTiming {
+                            policy_inference_ms,
+                            state_age_s: Some(age_s),
+                            loop_started,
+                            write_ms: Some(write_ms),
+                        },
                     )?;
                     self.maybe_print();
                 }
@@ -628,17 +632,13 @@ impl RecoveryRuntime {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn write_telemetry(
         &mut self,
         state: &PolicyStateFrame,
         obs: &[f32; 32],
         action: &[f32; 6],
         flags: u32,
-        policy_inference_ms: Option<f64>,
-        state_age_s: Option<f64>,
-        loop_started: Instant,
-        write_ms: Option<f64>,
+        timing: TelemetryTiming,
     ) -> Result<(), RecoveryRuntimeError> {
         let now = Instant::now();
         let loop_dt_ms = self
@@ -662,14 +662,14 @@ impl RecoveryRuntime {
         );
         record.insert(
             "loop_work_ms".to_string(),
-            json!(loop_started.elapsed().as_secs_f64() * 1000.0),
+            json!(timing.loop_started.elapsed().as_secs_f64() * 1000.0),
         );
         record.insert("loop_dt_ms".to_string(), json!(loop_dt_ms));
         record.insert(
             "state_age_ms_nx".to_string(),
-            json!(state_age_s.map(|v| v * 1000.0)),
+            json!(timing.state_age_s.map(|v| v * 1000.0)),
         );
-        record.insert("write_ms".to_string(), json!(write_ms));
+        record.insert("write_ms".to_string(), json!(timing.write_ms));
         record.insert("rate_hz".to_string(), json!(self.cfg.rate_hz));
         record.insert(
             "sample_period_ms".to_string(),
@@ -687,7 +687,7 @@ impl RecoveryRuntime {
         record.insert("flag_names".to_string(), json!(action_flag_names(flags)));
         record.insert(
             "policy_inference_ms".to_string(),
-            json!(policy_inference_ms),
+            json!(timing.policy_inference_ms),
         );
         record.insert(
             "policy_inference_ms_last".to_string(),
@@ -879,6 +879,13 @@ pub fn load_policy_runtime(
             checkpoint.to_path_buf(),
         )),
     }
+}
+
+struct TelemetryTiming {
+    policy_inference_ms: Option<f64>,
+    state_age_s: Option<f64>,
+    loop_started: Instant,
+    write_ms: Option<f64>,
 }
 
 pub enum LoadedPolicy {
