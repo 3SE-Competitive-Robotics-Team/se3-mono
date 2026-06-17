@@ -12,6 +12,9 @@ members = [
 [workspace.package]
 edition = "2024"
 
+[workspace.lints.clippy]
+unwrap_used = "warn"
+
 [workspace.dependencies]
 auto_aim_core = { path = "crates/auto_aim_core" }
 clap = { version = "4.5", features = ["derive"] }

@@ -213,6 +213,7 @@ fn raw_task_mode_or_feedback_value(feedback: &SensData) -> u8 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::rbt_mod::rbt_comm::rbt_comm_frame::{DEFAULT_BULLET_SPEED_MPS, SelfFraction};

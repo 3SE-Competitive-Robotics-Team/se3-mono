@@ -39,7 +39,12 @@ fn ensure_required_file(path: &Path, description: &str) -> RbtResult<()> {
 }
 
 fn rerun_recording_stream() -> RbtResult<rr::RecordingStream> {
-    if !GENERIC_RBT_CFG.read().unwrap().general_cfg.img_dbg {
+    if !GENERIC_RBT_CFG
+        .read()
+        .expect("rwlock poisoned")
+        .general_cfg
+        .img_dbg
+    {
         return Ok(rr::RecordingStream::disabled());
     }
 
@@ -82,7 +87,7 @@ async fn main() -> RbtResult<()> {
     let runtime_queues = RuntimePipelineQueues::new(armor_queues, energy_mechanism_queues);
     let runtime_router = RuntimeRouter::default();
     let runtime_completion = RuntimePipelineCompletion::new();
-    let cfg = GENERIC_RBT_CFG.read().unwrap().clone();
+    let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
 
     let model_path = Path::new(cfg.detector_cfg.armor.model_path.as_str());
     ensure_required_file(model_path, "armor model file")?;
@@ -203,6 +208,7 @@ async fn main() -> RbtResult<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use ort::ep;

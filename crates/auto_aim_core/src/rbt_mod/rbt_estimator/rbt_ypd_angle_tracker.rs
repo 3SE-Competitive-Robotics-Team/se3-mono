@@ -1179,6 +1179,7 @@ fn quadratic_accel(samples: impl Iterator<Item = (f64, f64)>) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -77,6 +77,7 @@ pub fn solve_ballistic_trajectory(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

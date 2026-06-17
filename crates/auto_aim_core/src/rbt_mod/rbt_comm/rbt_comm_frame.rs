@@ -451,6 +451,7 @@ fn read_i16_le(src: &[u8]) -> i16 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -180,7 +180,10 @@ fn spawn_synthetic_reader(shared: Arc<Mutex<SharedSnapshot>>, stop: Arc<AtomicBo
             let frame_hz = last_wall_time.map(|last| 1.0 / (now - last).max(1.0e-6));
             last_wall_time = Some(now);
             let snapshot = state_to_snapshot(&state, &builder, "synthetic", frame_hz, None);
-            shared.lock().unwrap().update(snapshot, Some(state));
+            shared
+                .lock()
+                .expect("mutex poisoned")
+                .update(snapshot, Some(state));
             seq = seq.wrapping_add(1);
             thread::sleep(period);
         }
@@ -235,13 +238,19 @@ fn spawn_cdc_reader(
                                             frame_hz,
                                             Some(&port),
                                         );
-                                        shared.lock().unwrap().update(snapshot, Some(state));
+                                        shared
+                                            .lock()
+                                            .expect("mutex poisoned")
+                                            .update(snapshot, Some(state));
                                     }
                                     Err(err) => eprintln!("state decode failed: {err}"),
                                 }
                             } else if message.msg_type == MSG_LATENCY {
                                 match decode_policy_latency(&message) {
-                                    Ok(latency) => shared.lock().unwrap().update_latency(latency),
+                                    Ok(latency) => shared
+                                        .lock()
+                                        .expect("mutex poisoned")
+                                        .update_latency(latency),
                                     Err(err) => eprintln!("latency decode failed: {err}"),
                                 }
                             }
@@ -255,7 +264,10 @@ fn spawn_cdc_reader(
                     snapshot.insert("host_time_s".to_string(), json!(unix_time_s()));
                     snapshot.insert("port".to_string(), json!(port));
                     snapshot.insert("error".to_string(), json!(err.to_string()));
-                    shared.lock().unwrap().update(snapshot, None);
+                    shared
+                        .lock()
+                        .expect("mutex poisoned")
+                        .update(snapshot, None);
                     thread::sleep(Duration::from_secs(1));
                 }
             }
@@ -281,7 +293,10 @@ fn spawn_remote_reader(
                     snapshot.insert("host_time_s".to_string(), json!(unix_time_s()));
                     snapshot.insert("remote_url".to_string(), json!(remote_url));
                     snapshot.insert("error".to_string(), json!(err.to_string()));
-                    shared.lock().unwrap().update(snapshot, None);
+                    shared
+                        .lock()
+                        .expect("mutex poisoned")
+                        .update(snapshot, None);
                     thread::sleep(Duration::from_secs(1));
                 }
             }
@@ -327,7 +342,10 @@ fn read_remote_events(
                 json!(remote_url.trim_end_matches('/')),
             );
             let state = snapshot_to_state(&snapshot);
-            shared.lock().unwrap().update(snapshot, state);
+            shared
+                .lock()
+                .expect("mutex poisoned")
+                .update(snapshot, state);
         }
     }
     Ok(())
@@ -358,7 +376,7 @@ fn handle_client(
             INDEX_HTML.as_bytes(),
         )?,
         "/snapshot" => {
-            let snapshot = Value::Object(shared.lock().unwrap().get());
+            let snapshot = Value::Object(shared.lock().expect("mutex poisoned").get());
             let payload = serde_json::to_vec(&snapshot)?;
             write_response(&mut stream, 200, "application/json", &payload)?;
         }
@@ -403,7 +421,7 @@ fn stream_events(
     let mut last_event_seq = u64::MAX;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(3600) {
-        let snapshot = shared.lock().unwrap().get();
+        let snapshot = shared.lock().expect("mutex poisoned").get();
         let event_seq = snapshot
             .get("_event_seq")
             .and_then(Value::as_u64)

@@ -123,6 +123,7 @@ impl<T> RbtSPSCQueueAsync<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::RbtSPSCQueueAsync;
 

@@ -147,6 +147,7 @@ pub mod rbt_can {
     }
 
     #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
     mod tests {
         use super::*;
         use crate::rbt_mod::rbt_comm::rbt_comm_frame::{

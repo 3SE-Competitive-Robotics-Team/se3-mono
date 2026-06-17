@@ -665,7 +665,7 @@ fn run_video_preprocess_loop(
         reader.height
     );
 
-    let cfg = GENERIC_RBT_CFG.read().unwrap().clone();
+    let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
     let offline_feedback = default_feedback(
         cfg.general_cfg.bullet_speed,
         cfg.general_cfg.offline_task_mode(),
@@ -1371,7 +1371,7 @@ pub fn energy_mechanism_estimate_process(
     tokio::spawn(async move {
         let tracker_cfg = GENERIC_RBT_CFG
             .read()
-            .unwrap()
+            .expect("rwlock poisoned")
             .energy_mechanism_cfg
             .tracker
             .clone();
@@ -1459,7 +1459,11 @@ pub fn estimate_process(
         let mut raw_visible = false;
         let mut filtered_visible = false;
         let mut last_transition_seq = runtime_router.state().transition_seq;
-        let estimator_cfg = GENERIC_RBT_CFG.read().unwrap().estimator_cfg.clone();
+        let estimator_cfg = GENERIC_RBT_CFG
+            .read()
+            .expect("rwlock poisoned")
+            .estimator_cfg
+            .clone();
         loop {
             if completion.armor_post_done() && solved_queue.is_empty() {
                 info!("estimate_process: Stopping processing as IS_RUNNING is false");
@@ -1524,7 +1528,7 @@ pub fn control_loop_250hz(
     completion: RuntimePipelineCompletion,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let cfg = GENERIC_RBT_CFG.read().unwrap().clone();
+        let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
         let mut fire_control = match FireControlController::new() {
             Ok(controller) => controller,
             Err(err) => {
@@ -1862,6 +1866,7 @@ async fn pop_latest_with_timeout<T>(queue: &RbtSPSCQueueAsync<T>, timeout: Durat
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

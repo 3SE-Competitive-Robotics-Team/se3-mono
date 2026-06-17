@@ -51,7 +51,11 @@ fn daily_log_dir(now: &Zoned) -> PathBuf {
 /// 返回 RbtLoggerGuard，持有它可确保退出时日志被 flush。
 /// 调用方只需维持 Option<RbtLoggerGuard> 即可。
 pub fn logger_init() -> RbtResult<Option<RbtLoggerGuard>> {
-    let logger_cfg = GENERIC_RBT_CFG.read().unwrap().logger_cfg.clone();
+    let logger_cfg = GENERIC_RBT_CFG
+        .read()
+        .expect("rwlock poisoned")
+        .logger_cfg
+        .clone();
     if !logger_cfg.file_log_enable && !logger_cfg.console_log_enable {
         return Ok(None);
     }
@@ -114,6 +118,7 @@ pub fn logger_init() -> RbtResult<Option<RbtLoggerGuard>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use log::{debug, error, info, trace, warn};

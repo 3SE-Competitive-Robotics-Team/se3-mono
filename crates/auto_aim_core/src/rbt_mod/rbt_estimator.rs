@@ -748,6 +748,7 @@ impl Default for RbtHandlerPoll {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::rbt_base::rbt_geometry::rbt_cylindrical2::RbtCylindricalPoint2;

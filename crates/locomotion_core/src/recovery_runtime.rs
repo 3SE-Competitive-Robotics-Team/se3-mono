@@ -1176,6 +1176,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

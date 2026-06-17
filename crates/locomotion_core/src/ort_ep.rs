@@ -156,6 +156,7 @@ fn builder_error(err: ort::Error<SessionBuilder>) -> OrtEpError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -596,6 +596,7 @@ fn closest_equivalent_rad(reference: f64, angle: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

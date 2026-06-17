@@ -353,6 +353,7 @@ fn shot_mode_for_task(task_mode: TaskMode) -> ShotBuffMode {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::rbt_mod::rbt_comm::rbt_comm_frame::SelfFraction;

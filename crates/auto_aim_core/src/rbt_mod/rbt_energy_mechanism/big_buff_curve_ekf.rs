@@ -525,6 +525,7 @@ fn estimate_linear_rate_from_history(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
