@@ -125,6 +125,7 @@ fn rectangular_hungarian(cost_matrix: &[Vec<f64>]) -> Vec<Option<usize>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::hungarian_algorithm;
 

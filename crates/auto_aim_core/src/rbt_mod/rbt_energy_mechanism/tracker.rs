@@ -423,6 +423,7 @@ fn normalize_angle(mut angle: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
     use crate::rbt_mod::rbt_energy_mechanism::solved::EnergyMechanismPose;

@@ -29,6 +29,7 @@ pub fn no_target_ctrl_data() -> CtrlData {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 

@@ -482,7 +482,7 @@ impl<'a> PayloadReader<'a> {
         let value = u16::from_le_bytes(
             self.payload[self.offset..self.offset + 2]
                 .try_into()
-                .unwrap(),
+                .expect("valid u16 payload slice"),
         );
         self.offset += 2;
         value
@@ -492,7 +492,7 @@ impl<'a> PayloadReader<'a> {
         let value = u32::from_le_bytes(
             self.payload[self.offset..self.offset + 4]
                 .try_into()
-                .unwrap(),
+                .expect("valid u32 payload slice"),
         );
         self.offset += 4;
         value
@@ -502,7 +502,7 @@ impl<'a> PayloadReader<'a> {
         let value = f32::from_le_bytes(
             self.payload[self.offset..self.offset + 4]
                 .try_into()
-                .unwrap(),
+                .expect("valid f32 payload slice"),
         );
         self.offset += 4;
         value
@@ -531,6 +531,7 @@ impl<'a> PayloadReader<'a> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 

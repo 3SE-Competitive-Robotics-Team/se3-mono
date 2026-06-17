@@ -83,6 +83,7 @@ pub fn synthetic_recovery_state(seq: u32) -> PolicyStateFrame {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 

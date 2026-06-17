@@ -479,6 +479,7 @@ fn bbox_iou(box1: &BBox, box2: &BBox) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageBuffer, Rgba};

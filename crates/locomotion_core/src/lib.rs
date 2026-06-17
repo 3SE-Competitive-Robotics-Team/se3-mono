@@ -31,6 +31,7 @@ pub use policy_io::{
 pub use robot::{Joint, JointGroup, RobotConfig, Termination};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
     use crate::policy_io::PolicyActionDecoderConfig;

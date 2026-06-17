@@ -732,6 +732,7 @@ fn isotropic_normalize(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 

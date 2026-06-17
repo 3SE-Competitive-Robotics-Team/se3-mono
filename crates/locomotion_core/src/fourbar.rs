@@ -173,6 +173,7 @@ fn output_knee_from_active_angle_analytic(active_angle: f64) -> f64 {
     wrap_angle(CALF_ZERO_ANGLE - phi)
 }
 
+#[allow(clippy::panic)]
 fn inverse_lut_grids(knee_grid: &[f64], alpha_grid: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let increasing = knee_grid.windows(2).all(|pair| pair[1] >= pair[0]);
     let decreasing = knee_grid.windows(2).all(|pair| pair[1] <= pair[0]);

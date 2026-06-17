@@ -624,6 +624,7 @@ fn closest_equivalent_angle_deg(reference_deg: f64, angle_deg: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 
