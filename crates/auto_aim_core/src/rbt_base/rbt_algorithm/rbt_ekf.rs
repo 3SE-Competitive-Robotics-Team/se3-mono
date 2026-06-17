@@ -127,7 +127,7 @@ fn symmetrize(matrix: &na::DMatrix<f64>) -> na::DMatrix<f64> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 

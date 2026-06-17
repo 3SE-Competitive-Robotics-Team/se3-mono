@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{

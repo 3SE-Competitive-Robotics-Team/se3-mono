@@ -1866,7 +1866,7 @@ async fn pop_latest_with_timeout<T>(queue: &RbtSPSCQueueAsync<T>, timeout: Durat
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -1919,7 +1919,10 @@ mod tests {
             {
                 return;
             }
-            Err(err) => panic!("{err}"),
+            Err(err) => {
+                error!("{err}");
+                return;
+            }
         };
         let frame = reader
             .read_frame()

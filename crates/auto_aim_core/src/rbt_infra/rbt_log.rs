@@ -118,7 +118,7 @@ pub fn logger_init() -> RbtResult<Option<RbtLoggerGuard>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
     use log::{debug, error, info, trace, warn};

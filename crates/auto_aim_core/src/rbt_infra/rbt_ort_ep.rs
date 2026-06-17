@@ -351,7 +351,7 @@ fn directory_has_any_library(dir: &str, library_prefixes: &[&str]) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
 
