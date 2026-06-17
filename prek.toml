@@ -1,0 +1,51 @@
+# prek pre-commit hooks — mirrors CI checks
+# Run manually: prek run --all-files
+# Install:      prek install
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "rust-fmt"
+name = "cargo fmt"
+description = "Check Rust formatting (same as CI)"
+language = "system"
+entry = "cargo fmt --all -- --check"
+files = "\\.rs$|Cargo\\.toml$|Cargo\\.lock$"
+pass_filenames = false
+
+[[repos.hooks]]
+id = "rust-clippy"
+name = "cargo clippy"
+description = "Run Clippy with -D warnings (same as CI)"
+language = "system"
+entry = "cargo clippy --locked --workspace --all-targets -- -D warnings"
+files = "\\.rs$|Cargo\\.toml$|Cargo\\.lock$"
+pass_filenames = false
+
+[[repos.hooks]]
+id = "rust-test"
+name = "cargo test"
+description = "Run all Rust tests (same as CI)"
+language = "system"
+entry = "cargo test --locked --workspace --all-targets"
+files = "\\.rs$|Cargo\\.toml$|Cargo\\.lock$"
+pass_filenames = false
+
+[[repos.hooks]]
+id = "python-lint"
+name = "ruff check"
+description = "Check Python lint with ruff (same as CI)"
+language = "system"
+entry = "uv run ruff check apps/sim_loop"
+files = "\\.py$|pyproject\\.toml$|uv\\.lock$"
+pass_filenames = false
+
+[[repos.hooks]]
+id = "python-test"
+name = "pytest"
+description = "Run Python tests (same as CI)"
+language = "system"
+entry = "uv run pytest apps/sim_loop/tests"
+files = "\\.py$|pyproject\\.toml$|uv\\.lock$"
+pass_filenames = false
