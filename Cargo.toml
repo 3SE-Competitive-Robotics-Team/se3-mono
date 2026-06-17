@@ -2,13 +2,11 @@
 resolver = "3"
 members = [
     "apps/auto_aim",
-    "apps/control",
     "apps/locomotion",
-    "apps/replay_telemetry",
-    "apps/visualize_cdc_state",
     "crates/auto_aim_core",
-    "crates/control_core",
     "crates/locomotion_core",
+    "tools/replay_telemetry",
+    "tools/visualize_cdc_state",
 ]
 
 [workspace.package]

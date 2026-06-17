@@ -10,11 +10,9 @@ RoboMaster 机器人运行时代码 monorepo。
 | --- | --- |
 | `apps/auto_aim` | 自瞄运行时应用，负责视频输入、ONNX 推理流水线、估计器、发控和 CAN 收发编排。 |
 | `crates/auto_aim_core` | 自瞄核心库，包含几何、PnP、YOLO 后处理、目标估计、发控、能量机关和通讯协议。 |
-| `apps/control` / `crates/control_core` | 底盘/控制相关运行时和共享逻辑。 |
-| `apps/sim_loop` | 仿真循环，使用本地物理仿真引擎，通过 Unix 数据报套接字接收控制进程发来的控制帧。 |
 | `apps/locomotion` / `crates/locomotion_core` | locomotion 运行时和模型推理、恢复控制逻辑。 |
-| `apps/replay_telemetry` | telemetry 回放工具。 |
-| `apps/visualize_cdc_state` | CDC 状态可视化工具。 |
+| `tools/replay_telemetry` | telemetry 回放验证工具。 |
+| `tools/visualize_cdc_state` | CDC 状态 Web 可视化工具。 |
 | `cfg/` | 当前迁移阶段的运行配置。 |
 | `docs/` | 设计文档、迁移说明和模块维护文档。 |
 
