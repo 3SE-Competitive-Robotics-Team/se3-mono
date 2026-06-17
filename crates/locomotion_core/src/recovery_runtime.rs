@@ -1,5 +1,3 @@
-#![allow(clippy::print_stdout)]
-
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -283,7 +281,7 @@ impl RecoveryRuntime {
     }
 
     pub fn run(&mut self) -> Result<RuntimeStats, RecoveryRuntimeError> {
-        println!(
+        eprintln!(
             "NX recovery runtime: checkpoint={} iter={} type={} device={}",
             self.cfg.checkpoint.display(),
             self.policy.iteration(),
@@ -344,7 +342,7 @@ impl RecoveryRuntime {
             let loop_result = (|| -> Result<(), RecoveryRuntimeError> {
                 let mut serial = CdcSerial::new(&port, self.cfg.baudrate);
                 serial.open()?;
-                println!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
+                eprintln!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
                 self.write_event(
                     "cdc_open",
                     json!({ "port": port, "reconnect_count": self.reconnect_count }),
@@ -455,7 +453,7 @@ impl RecoveryRuntime {
                             "error": error_text,
                         }),
                     )?;
-                    println!(
+                    eprintln!(
                         "USB CDC disconnected: port={port}; reconnecting in {CDC_RECONNECT_DELAY_S:.1}s"
                     );
                     thread::sleep(Duration::from_secs_f64(CDC_RECONNECT_DELAY_S));
@@ -838,7 +836,7 @@ impl RecoveryRuntime {
         } else {
             "policy"
         };
-        println!(
+        eprintln!(
             "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
             self.stats.steps,
             self.stats.state_frames,
@@ -986,8 +984,8 @@ impl TelemetryLogger {
             .create(true)
             .append(true)
             .open(&resolved)?;
-        println!("telemetry log: {}", resolved.display());
-        println!("telemetry meta: {}", meta_path.display());
+        eprintln!("telemetry log: {}", resolved.display());
+        eprintln!("telemetry meta: {}", meta_path.display());
         Ok(Self {
             path: Some(resolved),
             meta_path: Some(meta_path),

@@ -1,5 +1,3 @@
-#![allow(clippy::print_stdout)]
-
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{
@@ -130,16 +128,16 @@ pub fn run_visualizer(cfg: VisualizerConfig) -> Result<(), VisualizerError> {
     } else {
         cfg.host.as_str()
     };
-    println!(
+    eprintln!(
         "CDC visualizer listening on http://{}:{}",
         url_host, cfg.viewer_port
     );
     if cfg.no_mjcf_render {
-        println!(
+        eprintln!(
             "MJCF render disabled; Rust visualizer serves canvas fallback and JSON/SSE relay."
         );
     } else {
-        println!(
+        eprintln!(
             "MJCF render is not linked in this Rust build; /render_info reports enabled=false."
         );
     }
@@ -208,7 +206,7 @@ fn spawn_cdc_reader(
             let mut serial = CdcSerial::new(&port, baudrate);
             match serial.open() {
                 Ok(()) => {
-                    println!("CDC visualizer opened {port}");
+                    eprintln!("CDC visualizer opened {port}");
                     while !stop.load(Ordering::SeqCst) {
                         match serial.wait_readable(read_timeout_s) {
                             Ok(true) => {}
