@@ -502,7 +502,7 @@ impl<'a> PayloadReader<'a> {
         let value = f32::from_le_bytes(
             self.payload[self.offset..self.offset + 4]
                 .try_into()
-                .expect("valid u32 payload slice"),
+                .expect("valid f32 payload slice"),
         );
         self.offset += 4;
         value
