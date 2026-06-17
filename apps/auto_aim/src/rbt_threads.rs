@@ -1919,10 +1919,7 @@ mod tests {
             {
                 return;
             }
-            Err(err) => {
-                error!("{err}");
-                return;
-            }
+            Err(err) => panic!("{err}"),
         };
         let frame = reader
             .read_frame()
