@@ -186,6 +186,13 @@ impl PolicyActionDecoder {
     }
 }
 
+/// Joint state passed to policy observation builder.
+#[derive(Debug, Clone, Copy)]
+pub struct JointState {
+    pub pos: [f32; 6],
+    pub vel: [f32; 6],
+}
+
 /// Optional config overrides for policy observation building.
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyObservationConfig {
@@ -211,8 +218,7 @@ impl Default for PolicyObservationConfig {
 pub fn build_policy_observation(
     base_ang_vel_body: [f32; 3],
     projected_gravity: [f32; 3],
-    dof_pos: [f32; 6],
-    dof_vel: [f32; 6],
+    joint: JointState,
     command: &[f32],
     action_obs: [f32; 6],
     default_dof_pos: [f32; 6],
@@ -223,9 +229,9 @@ pub fn build_policy_observation(
     let (projected_gravity, bad) =
         projected_gravity_clean(projected_gravity, config.normalize_projected_gravity);
     had_nonfinite |= bad;
-    let (dof_pos, bad) = finite_array(dof_pos);
+    let (dof_pos, bad) = finite_array(joint.pos);
     had_nonfinite |= bad;
-    let (dof_vel, bad) = finite_array(dof_vel);
+    let (dof_vel, bad) = finite_array(joint.vel);
     had_nonfinite |= bad;
     let (action_obs, bad) = finite_array(action_obs);
     had_nonfinite |= bad;
