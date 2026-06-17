@@ -12,6 +12,25 @@ pub struct DetectedArmor {
     neutral_color: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DetectedArmorMeta {
+    pub frame_id: usize,
+    pub armor_id: EnemyId,
+    pub armor_type: EnemyArmorType,
+    pub neutral_color: bool,
+}
+
+impl DetectedArmorMeta {
+    pub fn small(frame_id: usize, armor_id: EnemyId) -> Self {
+        Self {
+            frame_id,
+            armor_id,
+            armor_type: EnemyArmorType::Small,
+            neutral_color: false,
+        }
+    }
+}
+
 impl DetectedArmor {
     pub fn new(
         center: RbtImgPoint2,
@@ -19,39 +38,14 @@ impl DetectedArmor {
         lb: RbtImgPoint2,
         rb: RbtImgPoint2,
         rt: RbtImgPoint2,
-        id: usize,
-        armor_id: EnemyId,
-    ) -> Self {
-        Self::with_type_and_color(
-            center,
-            lt,
-            lb,
-            rb,
-            rt,
-            id,
-            armor_id,
-            EnemyArmorType::Small,
-            false,
-        )
-    }
-
-    pub fn with_type_and_color(
-        center: RbtImgPoint2,
-        lt: RbtImgPoint2,
-        lb: RbtImgPoint2,
-        rb: RbtImgPoint2,
-        rt: RbtImgPoint2,
-        id: usize,
-        armor_id: EnemyId,
-        armor_type: EnemyArmorType,
-        neutral_color: bool,
+        meta: DetectedArmorMeta,
     ) -> Self {
         DetectedArmor {
             key_points: [center, lt, lb, rb, rt],
-            _id: id,
-            armor_id,
-            armor_type,
-            neutral_color,
+            _id: meta.frame_id,
+            armor_id: meta.armor_id,
+            armor_type: meta.armor_type,
+            neutral_color: meta.neutral_color,
         }
     }
 

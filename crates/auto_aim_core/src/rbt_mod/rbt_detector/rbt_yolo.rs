@@ -9,6 +9,7 @@ use image::imageops::FilterType;
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
+use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
 
 pub const LETTERBOX_PAD_VALUE: f32 = 0.0;
@@ -368,16 +369,18 @@ impl ArmorCorners {
             _ => crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyArmorType::Small,
         };
         let neutral_color = matches!(color, ArmorYoloColor::Gray | ArmorYoloColor::Purple);
-        DetectedArmor::with_type_and_color(
+        DetectedArmor::new(
             RbtImgPoint2::new_screen_pixel(center.0, center.1),
             RbtImgPoint2::new_screen_pixel(self.lt.0, self.lt.1),
             RbtImgPoint2::new_screen_pixel(self.lb.0, self.lb.1),
             RbtImgPoint2::new_screen_pixel(self.rb.0, self.rb.1),
             RbtImgPoint2::new_screen_pixel(self.rt.0, self.rt.1),
-            id,
-            armor_id,
-            armor_type,
-            neutral_color,
+            DetectedArmorMeta {
+                frame_id: id,
+                armor_id,
+                armor_type,
+                neutral_color,
+            },
         )
     }
 }

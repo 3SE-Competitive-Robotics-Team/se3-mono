@@ -294,10 +294,9 @@ impl ArmorPnpSolver {
         ata[(0, 0)] = n_f64;
         ata[(1, 1)] = n_f64;
 
-        for i in 0..4 {
-            let u = p_norm[i].x;
-            let v = p_norm[i].y;
-            let p_world_2d = self.world_points_2d[i];
+        for (p_norm, p_world_2d) in p_norm.iter().zip(self.world_points_2d.iter()) {
+            let u = p_norm.x;
+            let v = p_norm.y;
 
             let rx = r_mat[(0, 0)] * p_world_2d.x + r_mat[(0, 1)] * p_world_2d.y;
             let ry = r_mat[(1, 0)] * p_world_2d.x + r_mat[(1, 1)] * p_world_2d.y;
@@ -371,8 +370,7 @@ impl ArmorPnpSolver {
         k: &na::Matrix3<f64>,
     ) -> f64 {
         let mut sum_sq_err = 0.0;
-        for i in 0..4 {
-            let pw = &self.world_points[i];
+        for (pw, uv) in self.world_points.iter().zip(uvs.iter()) {
             let pc = pose * pw; // 将世界点变换到相机坐标系
 
             // 检查点是否在相机前方
@@ -388,7 +386,7 @@ impl ArmorPnpSolver {
             let u_repro = projected_h.x / projected_h.z;
             let v_repro = projected_h.y / projected_h.z;
 
-            sum_sq_err += (uvs[i].x - u_repro).powi(2) + (uvs[i].y - v_repro).powi(2);
+            sum_sq_err += (uv.x - u_repro).powi(2) + (uv.y - v_repro).powi(2);
         }
 
         (sum_sq_err / 4.0).sqrt()

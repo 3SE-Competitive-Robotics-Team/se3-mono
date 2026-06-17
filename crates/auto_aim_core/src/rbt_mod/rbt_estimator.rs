@@ -765,6 +765,7 @@ mod tests {
     use crate::rbt_base::rbt_geometry::rbt_cylindrical2::RbtCylindricalPoint2;
     use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
     use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
+    use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
     use crate::rbt_mod::rbt_armor::solved_armor::SolvedArmor;
     use na::Isometry3;
 
@@ -787,8 +788,7 @@ fire_armor_jump_block_frames = 3
             RbtImgPoint2::new_screen_pixel(center_x - 10.0, center_y + 5.0),
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y + 5.0),
             RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y - 5.0),
-            0,
-            EnemyId::Hero1,
+            DetectedArmorMeta::small(0, EnemyId::Hero1),
         );
 
         RbtSolvedResult {
@@ -812,8 +812,7 @@ fire_armor_jump_block_frames = 3
                 RbtImgPoint2::new_screen_pixel(center_x - 10.0, center_y + 5.0),
                 RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y + 5.0),
                 RbtImgPoint2::new_screen_pixel(center_x + 10.0, center_y - 5.0),
-                idx,
-                EnemyId::Hero1,
+                DetectedArmorMeta::small(idx, EnemyId::Hero1),
             );
             let pose = Isometry3::translation(200.0 + idx as f64 * 20.0, idx as f64 * 200.0, 100.0);
             armors.push(SolvedArmor::new(
