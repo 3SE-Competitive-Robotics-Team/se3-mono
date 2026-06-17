@@ -15,7 +15,9 @@ use auto_aim_core::rbt_infra::rbt_ort_ep::configure_session_builder;
 use auto_aim_core::rbt_infra::rbt_queue_async::RbtSPSCQueueAsync;
 use auto_aim_core::rbt_mod::rbt_comm::rbt_comm_frame::{CtrlData, SensData};
 use auto_aim_core::rbt_mod::rbt_detector::rbt_frame::RbtFrame;
-use auto_aim_core::rbt_mod::rbt_energy_mechanism::{EnergyMechanismFrame, EnergyMechanismSolvedFrame};
+use auto_aim_core::rbt_mod::rbt_energy_mechanism::{
+    EnergyMechanismFrame, EnergyMechanismSolvedFrame,
+};
 use auto_aim_core::rbt_mod::rbt_runtime_router::RuntimeRouter;
 use auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResults;
 use log::info;

@@ -281,7 +281,9 @@ fn enemy_rerun_name(enemy_id: EnemyId) -> &'static str {
     }
 }
 
-fn solved_enemy_center_position(enemy: &auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResult) -> [f32; 3] {
+fn solved_enemy_center_position(
+    enemy: &auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResult,
+) -> [f32; 3] {
     let center = enemy.coord.to_xy();
     let armor_z = enemy
         .armors
@@ -1308,7 +1310,11 @@ pub fn energy_mechanism_post_process(
                     &post_cfg,
                 );
                 let solved = solve_energy_mechanism(frame.mode(), objects, &cam_k)?;
-                Ok::<_, auto_aim_core::rbt_infra::rbt_err::RbtError>((solved, stats, started.elapsed()))
+                Ok::<_, auto_aim_core::rbt_infra::rbt_err::RbtError>((
+                    solved,
+                    stats,
+                    started.elapsed(),
+                ))
             })
             .await;
 
