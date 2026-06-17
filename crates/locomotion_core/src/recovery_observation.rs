@@ -51,8 +51,8 @@ impl RecoveryObservationBuilder {
             state.dof_vel(),
             &self.command,
             last_action,
+            self.default_dof_pos,
             PolicyObservationConfig {
-                default_dof_pos: self.default_dof_pos,
                 command_scale: Some(self.command_scale),
                 expected_num_obs: Some(obs_cfg.num_obs),
                 clip_value: Some(obs_cfg.clip_value),

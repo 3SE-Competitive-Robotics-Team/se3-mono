@@ -189,7 +189,6 @@ impl PolicyActionDecoder {
 /// Optional config overrides for policy observation building.
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyObservationConfig {
-    pub default_dof_pos: [f32; 6],
     pub command_scale: Option<[f32; 5]>,
     pub expected_num_obs: Option<usize>,
     pub clip_value: Option<f32>,
@@ -200,7 +199,6 @@ pub struct PolicyObservationConfig {
 impl Default for PolicyObservationConfig {
     fn default() -> Self {
         Self {
-            default_dof_pos: [0.0; 6],
             command_scale: None,
             expected_num_obs: None,
             clip_value: None,
@@ -217,6 +215,7 @@ pub fn build_policy_observation(
     dof_vel: [f32; 6],
     command: &[f32],
     action_obs: [f32; 6],
+    default_dof_pos: [f32; 6],
     config: PolicyObservationConfig,
 ) -> Result<PolicyObservationResult, PolicyIoError> {
     let obs_cfg = ObservationConfig::default();
@@ -258,10 +257,10 @@ pub fn build_policy_observation(
         dof_pos[3] as f64,
     ];
     let mut default_leg_pos = [
-        config.default_dof_pos[0] as f64,
-        config.default_dof_pos[1] as f64,
-        config.default_dof_pos[2] as f64,
-        config.default_dof_pos[3] as f64,
+        default_dof_pos[0] as f64,
+        default_dof_pos[1] as f64,
+        default_dof_pos[2] as f64,
+        default_dof_pos[3] as f64,
     ];
     let mut leg_vel = [
         dof_vel[0] as f64,
