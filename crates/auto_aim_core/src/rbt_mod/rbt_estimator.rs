@@ -104,10 +104,7 @@ pub mod rbt_estimator_state {
         Init, // 初始化
         Sleep,
         WakeUp, // 从睡眠中恢复
-        Track {
-            jump: bool,
-        }, // 跟踪状态
-        Switching, // 云台移动中
+        Track,  // 跟踪状态
         Lost {
             // 目标丢失（未识别，装甲板灭）
             time_stamp: tokio::time::Instant, // 丢失时间戳
@@ -136,27 +133,19 @@ pub mod rbt_estimator_state {
                 WakeUp => {
                     // 看到装甲板则进入追踪
                     *self = match solved_enemy {
-                        Some(_) => Track { jump: false },
+                        Some(_) => Track,
                         None => Lost {
                             time_stamp: tokio::time::Instant::now(),
                         },
                     }
                 }
-                Track { jump } => {
-                    if *jump {
-                        *self = Switching;
-                    }
+                Track => {
                     // 如果solved_enemy 是 None 进入Lost状态，并记录当前时间戳
                     if solved_enemy.is_none() {
                         *self = Lost {
                             time_stamp: tokio::time::Instant::now(),
                         };
                     }
-                }
-                Switching => {
-                    // 检查是否到位，如果到位则回到Track
-                    // TODO: 实现云台到位检查
-                    *self = Track { jump: false };
                 }
                 Lost { time_stamp } => {
                     *self = match (
@@ -172,7 +161,7 @@ pub mod rbt_estimator_state {
                 }
                 Recovery => {
                     *self = match solved_enemy {
-                        Some(_) => Track { jump: false },
+                        Some(_) => Track,
                         None => Lost {
                             time_stamp: tokio::time::Instant::now(),
                         },
@@ -302,9 +291,8 @@ impl RbtEstimator {
     }
 
     fn update_global_vars(&mut self, solved_enemy: &Option<RbtSolvedResult>) {
-        use EstimatorStateMachine::*;
         // 设置fire
-        self.fire = matches!(self.state, Track { .. });
+        self.fire = matches!(self.state, EstimatorStateMachine::Track);
 
         // 设置single_or_double
         self.single_or_double = solved_enemy
@@ -404,14 +392,14 @@ impl RbtEstimator {
 
         match &self.state {
             Init | Sleep => {}
-            WakeUp | Recovery | Track { .. } => {
+            WakeUp | Recovery | Track => {
                 self.predict_or_reset_tracker(dt_s);
                 if let Some(solved) = solved_enemy {
                     self.correct_tracker_with_solution(cfg, solved, tracker_was_initialized);
                 }
                 self.sync_tracker_snapshot();
             }
-            Lost { .. } | Switching => {
+            Lost { .. } => {
                 self.predict_or_reset_tracker(dt_s);
                 self.sync_tracker_snapshot();
             }
@@ -861,7 +849,7 @@ fire_armor_jump_block_frames = 3
 
     fn estimator_with_stable_snapshot() -> RbtEstimator {
         let mut estimator = RbtEstimator::new(EnemyId::Hero1);
-        estimator.state = EstimatorStateMachine::Track { jump: false };
+        estimator.state = EstimatorStateMachine::Track;
         estimator.fire = true;
         estimator.latest_tracker_snapshot = Some(stable_tracker_snapshot());
         estimator
