@@ -1,5 +1,4 @@
 # rbt_cfg.toml
-# todo!(需要开发一个检查无用字段功能，防止修改未使用参数来调整自瞄效果)
 
 [game_cfg]
 # 电控发送优先级大于自己设置的优先级
@@ -88,9 +87,6 @@ armor_lost_wait_duration_ms = 100
 enemy_lost_wait_duration_ms = 1000
 image_center_x = 640.0
 image_center_y = 360.0
-static_translation_speed_threshold_mps = 0.25
-static_z_speed_threshold_mps = 0.20
-static_yaw_rate_threshold_rad_s = 0.35
 fire_block_on_armor_jump = true
 fire_armor_jump_block_frames = 3
 ypd_geometry_recovery_window_frames = 24

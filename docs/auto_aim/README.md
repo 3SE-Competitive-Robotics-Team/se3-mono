@@ -45,7 +45,7 @@
 - `[detector_cfg]` 控制相机尺寸、推理尺寸和 ONNX Runtime execution provider。
 - `[detector_cfg.armor]` 和 `[detector_cfg.energy_mechanism]` 分别配置两个模型路径、engine 目录和后处理阈值。
 - `[cam_cfg]` 保存相机内参。
-- `[estimator_cfg]` 保存目标丢失等待、图像中心、静态目标阈值、装甲板跳变开火保护和 YPD 几何恢复参数。
+- `[estimator_cfg]` 保存目标丢失等待、图像中心、装甲板跳变开火保护和 YPD 几何恢复参数。运动状态分类使用硬编码常量。
 - `[energy_mechanism_cfg]` 保存能量机关 tracker、aimer 和 MPC 参数。
 
 `detector_cfg.ort_ep = "auto"` 时，运行时会按平台和可见库选择 EP。macOS 默认 CoreML；Linux aarch64 在 CUDA、TensorRT 或 cuDNN 库可见时优先走硬件加速，否则回退；其他平台按 `rbt_ort_ep` 的策略选择。
