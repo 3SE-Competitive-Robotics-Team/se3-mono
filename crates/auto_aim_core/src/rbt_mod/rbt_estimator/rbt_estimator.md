@@ -14,4 +14,4 @@
 
 - `Init` / `Sleep`: 清空 tracker 和当前 snapshot。
 - `WakeUp` / `Recovery` / `Track`: 预测后用观测修正。
-- `Lost` / `Switching`: 无观测纯预测。
+- `Lost`: 无观测纯预测。
