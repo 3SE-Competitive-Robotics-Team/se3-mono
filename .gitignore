@@ -1,9 +1,6 @@
 target/
+/log/
 __pycache__/
-*.py[cod]
-log/
-crates/log/
-imgs/
-videos/
 model/
+videos/
 rerun-log/

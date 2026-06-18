@@ -20,6 +20,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kp", type=float, default=40.0)
     parser.add_argument("--kd", type=float, default=2.0)
     parser.add_argument("--wheel-kd", type=float, default=0.5)
+    parser.add_argument(
+        "--viewer",
+        choices=["none", "rerun", "mujoco"],
+        default="none",
+        help="Viewer mode. Use 'rerun' on macOS; 'mujoco' requires mjpython on macOS.",
+    )
+    parser.add_argument("--rerun-address", default=None)
+    parser.add_argument("--rerun-save", type=Path, default=None)
+    parser.add_argument("--rerun-memory-limit", default="1GB")
     return parser
 
 
@@ -34,6 +43,10 @@ def main() -> int:
             leg_kp=args.kp,
             leg_kd=args.kd,
             wheel_kd=args.wheel_kd,
+            viewer=args.viewer,
+            rerun_address=args.rerun_address,
+            rerun_save=args.rerun_save,
+            rerun_memory_limit=args.rerun_memory_limit,
         )
     )
     runtime.run()

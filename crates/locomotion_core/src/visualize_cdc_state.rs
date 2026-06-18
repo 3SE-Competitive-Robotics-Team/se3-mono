@@ -574,17 +574,26 @@ fn snapshot_to_state(snapshot: &Map<String, Value>) -> Option<PolicyStateFrame> 
     })
 }
 
-fn observation_slices(obs: [f32; 32]) -> Map<String, Value> {
+fn observation_slices(obs: Vec<f32>) -> Map<String, Value> {
     let mut map = Map::new();
     map.insert("base_ang_vel[0:3]".to_string(), json!(&obs[0..3]));
     map.insert("projected_gravity[3:6]".to_string(), json!(&obs[3..6]));
     map.insert("command[6:11]".to_string(), json!(&obs[6..11]));
-    map.insert("leg_pos[11:15]".to_string(), json!(&obs[11..15]));
-    map.insert("leg_vel[15:19]".to_string(), json!(&obs[15..19]));
-    map.insert("wheel_pos_zero[19:21]".to_string(), json!(&obs[19..21]));
-    map.insert("wheel_vel[21:23]".to_string(), json!(&obs[21..23]));
-    map.insert("last_action[23:29]".to_string(), json!(&obs[23..29]));
-    map.insert("jump_command[29:32]".to_string(), json!(&obs[29..32]));
+    if obs.len() == 34 {
+        map.insert("leg_phase_active[11:17]".to_string(), json!(&obs[11..17]));
+        map.insert("leg_vel[17:21]".to_string(), json!(&obs[17..21]));
+        map.insert("wheel_pos_zero[21:23]".to_string(), json!(&obs[21..23]));
+        map.insert("wheel_vel[23:25]".to_string(), json!(&obs[23..25]));
+        map.insert("last_action[25:31]".to_string(), json!(&obs[25..31]));
+        map.insert("recovery_cmd[31:34]".to_string(), json!(&obs[31..34]));
+    } else {
+        map.insert("leg_pos[11:15]".to_string(), json!(&obs[11..15]));
+        map.insert("leg_vel[15:19]".to_string(), json!(&obs[15..19]));
+        map.insert("wheel_pos_zero[19:21]".to_string(), json!(&obs[19..21]));
+        map.insert("wheel_vel[21:23]".to_string(), json!(&obs[21..23]));
+        map.insert("last_action[23:29]".to_string(), json!(&obs[23..29]));
+        map.insert("recovery_cmd[29:32]".to_string(), json!(&obs[29..32]));
+    }
     map
 }
 
