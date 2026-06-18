@@ -84,8 +84,8 @@ class SimLoopRuntime:
                     viewer.sync(step=steps, ctrl=ctrl)
                     if peer_path is not None:
                         state = self.mj.state_frame(
-                            seq=steps,
-                            tick_ms=int(steps * period * 1000.0),
+                            seq=steps & 0xFFFFFFFF,
+                            tick_ms=int(self.mj.data.time * 1000.0) & 0xFFFFFFFF,
                             target=target,
                             target_age_ms=int(max(0.0, time.monotonic() - target_time) * 1000.0),
                             target_valid=target.seq != 0,

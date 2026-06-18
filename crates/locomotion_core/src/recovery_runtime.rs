@@ -362,6 +362,16 @@ impl RecoveryRuntime {
 
     fn run_sim(&mut self) -> Result<(), RecoveryRuntimeError> {
         let max_steps = self.cfg.max_steps;
+        let state_timeout =
+            Duration::try_from_secs_f64(self.cfg.state_timeout_s).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "state-timeout-s must be a finite non-negative duration: {} ({err})",
+                        self.cfg.state_timeout_s
+                    ),
+                )
+            })?;
         self.reset_policy_memory(true, "sim_connect")?;
         unlink_socket_path_if_present(&self.cfg.sim_client_socket_path)?;
         let client_socket_guard = SocketPathGuard::new(self.cfg.sim_client_socket_path.clone());
@@ -381,7 +391,7 @@ impl RecoveryRuntime {
                 source: err,
             });
         }
-        socket.set_read_timeout(Some(Duration::from_secs_f64(self.cfg.state_timeout_s)))?;
+        socket.set_read_timeout(Some(state_timeout))?;
         self.resolved_port = Some(self.cfg.sim_socket_path.to_string_lossy().into_owned());
         self.write_event(
             "sim_open",
@@ -1241,8 +1251,10 @@ fn resolve_telemetry_log_path(path: PathBuf) -> Result<PathBuf, std::io::Error> 
 }
 
 fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
-        return Ok(());
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
     };
     if !meta.file_type().is_socket() {
         return Err(std::io::Error::new(

@@ -472,7 +472,19 @@ fn state_to_snapshot(
     frame_hz: Option<f64>,
     port: Option<&str>,
 ) -> Map<String, Value> {
-    let obs = builder.build(state, [0.0; 6]).ok();
+    let obs = builder
+        .build(state, [0.0; 6])
+        .or_else(|err| match err {
+            crate::policy_io::PolicyIoError::ObservationShapeMismatch { expected, got }
+                if expected == 34 && got == 32 =>
+            {
+                RecoveryObservationBuilder::new()
+                    .with_num_obs(32)
+                    .build(state, [0.0; 6])
+            }
+            _ => Err(err),
+        })
+        .ok();
     let joint_pos = state.joint_pos;
     let target_joint_pos = state.target_joint_pos;
     let joint_pos_error = wrap_angle_vec4(sub4(target_joint_pos, joint_pos));
