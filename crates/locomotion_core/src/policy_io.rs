@@ -186,29 +186,52 @@ impl PolicyActionDecoder {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Joint state passed to policy observation builder.
+#[derive(Debug, Clone, Copy)]
+pub struct JointState {
+    pub pos: [f32; 6],
+    pub vel: [f32; 6],
+}
+
+/// Optional config overrides for policy observation building.
+#[derive(Debug, Clone, Copy)]
+pub struct PolicyObservationConfig {
+    pub command_scale: Option<[f32; 5]>,
+    pub expected_num_obs: Option<usize>,
+    pub clip_value: Option<f32>,
+    pub fourbar_surrogate: bool,
+    pub normalize_projected_gravity: bool,
+}
+
+impl Default for PolicyObservationConfig {
+    fn default() -> Self {
+        Self {
+            command_scale: None,
+            expected_num_obs: None,
+            clip_value: None,
+            fourbar_surrogate: false,
+            normalize_projected_gravity: true,
+        }
+    }
+}
+
 pub fn build_policy_observation(
     base_ang_vel_body: [f32; 3],
     projected_gravity: [f32; 3],
-    dof_pos: [f32; 6],
-    dof_vel: [f32; 6],
+    joint: JointState,
     command: &[f32],
     action_obs: [f32; 6],
     default_dof_pos: [f32; 6],
-    command_scale: Option<[f32; 5]>,
-    expected_num_obs: Option<usize>,
-    clip_value: Option<f32>,
-    fourbar_surrogate: bool,
-    normalize_projected_gravity: bool,
+    config: PolicyObservationConfig,
 ) -> Result<PolicyObservationResult, PolicyIoError> {
     let obs_cfg = ObservationConfig::default();
     let (base_ang_vel_body, mut had_nonfinite) = finite_array(base_ang_vel_body);
     let (projected_gravity, bad) =
-        projected_gravity_clean(projected_gravity, normalize_projected_gravity);
+        projected_gravity_clean(projected_gravity, config.normalize_projected_gravity);
     had_nonfinite |= bad;
-    let (dof_pos, bad) = finite_array(dof_pos);
+    let (dof_pos, bad) = finite_array(joint.pos);
     had_nonfinite |= bad;
-    let (dof_vel, bad) = finite_array(dof_vel);
+    let (dof_vel, bad) = finite_array(joint.vel);
     had_nonfinite |= bad;
     let (action_obs, bad) = finite_array(action_obs);
     had_nonfinite |= bad;
@@ -225,7 +248,7 @@ pub fn build_policy_observation(
         }
     }
 
-    let scale = command_scale.unwrap_or(obs_cfg.command_scale);
+    let scale = config.command_scale.unwrap_or(obs_cfg.command_scale);
     let mut obs = Vec::with_capacity(32);
     obs.extend(base_ang_vel_body.map(|v| v * obs_cfg.ang_vel_scale));
     obs.extend(projected_gravity);
@@ -251,7 +274,7 @@ pub fn build_policy_observation(
         dof_vel[2] as f64,
         dof_vel[3] as f64,
     ];
-    if fourbar_surrogate {
+    if config.fourbar_surrogate {
         leg_pos = output_to_policy_pos(leg_pos);
         default_leg_pos = output_to_policy_pos(default_leg_pos);
         leg_vel = output_to_policy_vel(
@@ -280,14 +303,14 @@ pub fn build_policy_observation(
         obs.extend([command_arr[5], command_arr[6], 0.0]);
     }
 
-    let expected = expected_num_obs.unwrap_or(obs_cfg.num_obs);
+    let expected = config.expected_num_obs.unwrap_or(obs_cfg.num_obs);
     if obs.len() != expected {
         return Err(PolicyIoError::ObservationShapeMismatch {
             expected,
             got: obs.len(),
         });
     }
-    let limit = clip_value.unwrap_or(obs_cfg.clip_value);
+    let limit = config.clip_value.unwrap_or(obs_cfg.clip_value);
     let mut out = [0.0_f32; 32];
     for (idx, value) in obs.into_iter().enumerate() {
         out[idx] = if value.is_nan() {

@@ -1,4 +1,7 @@
-use crate::{ObservationConfig, PolicyObservationResult, RobotConfig, build_policy_observation};
+use crate::{
+    JointState, ObservationConfig, PolicyObservationConfig, PolicyObservationResult, RobotConfig,
+    build_policy_observation,
+};
 
 use crate::protocol::PolicyStateFrame;
 
@@ -44,16 +47,20 @@ impl RecoveryObservationBuilder {
         build_policy_observation(
             state.base_ang_vel_body,
             state.projected_gravity,
-            state.dof_pos(),
-            state.dof_vel(),
+            JointState {
+                pos: state.dof_pos(),
+                vel: state.dof_vel(),
+            },
             &self.command,
             last_action,
             self.default_dof_pos,
-            Some(self.command_scale),
-            Some(obs_cfg.num_obs),
-            Some(obs_cfg.clip_value),
-            false,
-            true,
+            PolicyObservationConfig {
+                command_scale: Some(self.command_scale),
+                expected_num_obs: Some(obs_cfg.num_obs),
+                clip_value: Some(obs_cfg.clip_value),
+                fourbar_surrogate: false,
+                normalize_projected_gravity: true,
+            },
         )
     }
 }

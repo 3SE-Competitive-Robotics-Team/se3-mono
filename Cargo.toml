@@ -17,6 +17,7 @@ dbg_macro = "deny"
 panic = "deny"
 print_stdout = "deny"
 todo = "deny"
+too_many_arguments = "deny"
 unwrap_used = "deny"
 
 [workspace.dependencies]
