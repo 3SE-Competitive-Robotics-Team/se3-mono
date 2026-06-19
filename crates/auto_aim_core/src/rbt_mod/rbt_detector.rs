@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use crate::rbt_infra::rbt_cfg;
 use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
 use crate::rbt_infra::rbt_global::GENERIC_RBT_CFG;
-use crate::rbt_infra::rbt_ort_ep::configure_session_builder;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
 use crate::rbt_mod::rbt_detector::rbt_frame::{
     ARMOR_INPUT_HEIGHT, ARMOR_INPUT_WIDTH, ARMOR_OUTPUT_COLS, ARMOR_OUTPUT_ROWS,
@@ -21,6 +20,7 @@ use crate::rbt_mod::rbt_detector::rbt_yolo::{
     ArmorYoloPostprocessCfg, LetterboxTransform, decode_armor_output, preprocess_letterbox_f16,
 };
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::EnemyId;
+use se3_ort_ep::configure_session_builder;
 
 pub mod rbt_frame;
 pub mod rbt_yolo;
@@ -98,13 +98,13 @@ pub fn pipeline(cfg: &rbt_cfg::DetectorCfg) -> RbtResult<HashMap<EnemyId, Vec<De
     let (session_builder, ort_ep) = configure_session_builder(
         session_builder,
         cfg.ort_ep.as_str(),
-        cfg.armor.engine_path.as_str(),
+        cfg.armor.engine_path.as_path(),
     )?;
     info!("using ONNX Runtime execution provider: {}", ort_ep.as_str());
     let mut session = session_builder
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
         .with_inter_threads(16)?
-        .commit_from_file(cfg.armor.model_path.as_str())?;
+        .commit_from_file(&cfg.armor.model_path)?;
 
     let tim = std::time::Instant::now();
     let mut detector = ArmorDetector::init(cfg)?;

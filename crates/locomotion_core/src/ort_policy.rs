@@ -6,9 +6,8 @@ use ort::{
     session::{Session, builder::GraphOptimizationLevel},
     value::{Outlet, TensorRef},
 };
+use se3_ort_ep::{OrtEpError, OrtExecutionProvider, configure_session_builder};
 use thiserror::Error;
-
-use crate::ort_ep::{OrtEpError, OrtExecutionProvider, configure_session_builder};
 
 #[derive(Debug, Error)]
 pub enum OrtPolicyError {
@@ -50,8 +49,8 @@ pub struct OrtPolicyRuntime {
 }
 
 impl OrtPolicyRuntime {
-    pub fn new(checkpoint: impl AsRef<Path>, configured_ep: &str) -> Result<Self, OrtPolicyError> {
-        let checkpoint_path = checkpoint.as_ref().to_path_buf();
+    pub fn new(checkpoint: &Path, configured_ep: &str) -> Result<Self, OrtPolicyError> {
+        let checkpoint_path = checkpoint.to_path_buf();
         if !checkpoint_path.exists() {
             return Err(OrtPolicyError::CheckpointNotFound(checkpoint_path));
         }

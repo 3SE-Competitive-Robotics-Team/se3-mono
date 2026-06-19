@@ -835,6 +835,7 @@ dependencies = [
  "ndarray 0.17.2",
  "ort",
  "rerun",
+ "se3_ort_ep",
  "tokio",
 ]
 
@@ -855,6 +856,7 @@ dependencies = [
  "ndarray 0.17.2",
  "ort",
  "rerun",
+ "se3_ort_ep",
  "serde",
  "socketcan",
  "strum 0.28.0",
@@ -4932,6 +4934,7 @@ dependencies = [
  "libc",
  "ndarray 0.17.2",
  "ort",
+ "se3_ort_ep",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
@@ -9921,6 +9924,14 @@ name = "scuffle-workspace-hack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8028ded836a0d9fabdfa4d713389b76a2098b5153f50a135c8faed7e3a3d5ae2"
+
+[[package]]
+name = "se3_ort_ep"
+version = "0.1.0"
+dependencies = [
+ "ort",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "security-framework"

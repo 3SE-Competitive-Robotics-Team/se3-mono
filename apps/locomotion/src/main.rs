@@ -40,7 +40,7 @@ struct Args {
     #[arg(long, default_value_t = 921600)]
     baudrate: i32,
 
-    #[arg(long, default_value = "cpu")]
+    #[arg(long, default_value = "auto")]
     device: String,
 
     #[arg(long = "rate-hz")]

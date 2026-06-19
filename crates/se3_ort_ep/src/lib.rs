@@ -1,5 +1,9 @@
-use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
+//! Shared ONNX Runtime execution provider selection.
+
+use std::path::Path;
+
 use ort::{ep, ep::ExecutionProviderDispatch, session::builder::SessionBuilder};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum OrtExecutionProvider {
@@ -20,6 +24,16 @@ impl OrtExecutionProvider {
             Self::CPU => "CPU",
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum OrtEpError {
+    #[error("unsupported ONNX Runtime execution provider: {0}")]
+    UnsupportedExecutionProvider(String),
+    #[error("{0}")]
+    Ort(#[from] ort::Error),
+    #[error("{0}")]
+    OrtBuilder(String),
 }
 
 pub fn default_execution_provider() -> OrtExecutionProvider {
@@ -68,7 +82,7 @@ pub fn resolve_execution_provider(configured: &str) -> Option<OrtExecutionProvid
         "" | "auto" => Some(default_execution_provider()),
         "coreml" => Some(OrtExecutionProvider::CoreML),
         "openvino" => Some(OrtExecutionProvider::OpenVINO),
-        "tensorrt" => Some(OrtExecutionProvider::TensorRT),
+        "tensorrt" | "trt" => Some(OrtExecutionProvider::TensorRT),
         "cuda" => Some(OrtExecutionProvider::CUDA),
         "cpu" => Some(OrtExecutionProvider::CPU),
         _ => None,
@@ -78,15 +92,15 @@ pub fn resolve_execution_provider(configured: &str) -> Option<OrtExecutionProvid
 pub fn configure_session_builder(
     session_builder: SessionBuilder,
     configured_ep: &str,
-    engine_cache_path: &str,
-) -> RbtResult<(SessionBuilder, OrtExecutionProvider)> {
+    engine_cache_path: &Path,
+) -> Result<(SessionBuilder, OrtExecutionProvider), OrtEpError> {
     let configured_ep = configured_ep.trim();
     if configured_ep.is_empty() || configured_ep.eq_ignore_ascii_case("auto") {
         return configure_auto_session_builder(session_builder, engine_cache_path);
     }
 
     let provider = resolve_execution_provider(configured_ep)
-        .ok_or_else(|| RbtError::UnsupportedExecutionProvider(configured_ep.to_string()))?;
+        .ok_or_else(|| OrtEpError::UnsupportedExecutionProvider(configured_ep.to_string()))?;
 
     let session_builder = match provider {
         OrtExecutionProvider::CoreML => configure_coreml(session_builder, engine_cache_path)?,
@@ -104,26 +118,26 @@ pub fn configure_session_builder(
 #[cfg(target_os = "macos")]
 fn configure_coreml(
     session_builder: SessionBuilder,
-    model_cache_dir: &str,
-) -> RbtResult<SessionBuilder> {
-    Ok(
-        session_builder.with_execution_providers([ep::CoreMLExecutionProvider::default()
+    model_cache_dir: &Path,
+) -> Result<SessionBuilder, OrtEpError> {
+    session_builder
+        .with_execution_providers([ep::CoreMLExecutionProvider::default()
             .with_compute_units(ep::coreml::ComputeUnits::All)
             .with_model_format(ep::coreml::ModelFormat::MLProgram)
             .with_specialization_strategy(ep::coreml::SpecializationStrategy::FastPrediction)
             .with_static_input_shapes(true)
-            .with_model_cache_dir(model_cache_dir)
+            .with_model_cache_dir(model_cache_dir.to_string_lossy())
             .build()
-            .error_on_failure()])?,
-    )
+            .error_on_failure()])
+        .map_err(builder_error)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn configure_coreml(
     _session_builder: SessionBuilder,
-    _model_cache_dir: &str,
-) -> RbtResult<SessionBuilder> {
-    Err(RbtError::UnsupportedExecutionProvider(
+    _model_cache_dir: &Path,
+) -> Result<SessionBuilder, OrtEpError> {
+    Err(OrtEpError::UnsupportedExecutionProvider(
         "CoreML is only supported on macOS targets".to_string(),
     ))
 }
@@ -132,31 +146,31 @@ fn configure_coreml(
     target_arch = "x86_64",
     any(target_os = "linux", target_os = "windows")
 ))]
-fn configure_openvino(session_builder: SessionBuilder) -> RbtResult<SessionBuilder> {
-    Ok(
-        session_builder.with_execution_providers([ep::OpenVINOExecutionProvider::default()
+fn configure_openvino(session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
+    session_builder
+        .with_execution_providers([ep::OpenVINOExecutionProvider::default()
             .with_device_type("GPU")
             .build()
-            .error_on_failure()])?,
-    )
+            .error_on_failure()])
+        .map_err(builder_error)
 }
 
 #[cfg(not(all(
     target_arch = "x86_64",
     any(target_os = "linux", target_os = "windows")
 )))]
-fn configure_openvino(_session_builder: SessionBuilder) -> RbtResult<SessionBuilder> {
-    Err(RbtError::UnsupportedExecutionProvider(
+fn configure_openvino(_session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
+    Err(OrtEpError::UnsupportedExecutionProvider(
         "OpenVINO is only enabled for x86_64 Linux/Windows targets".to_string(),
     ))
 }
 
-fn configure_cpu(session_builder: SessionBuilder) -> RbtResult<SessionBuilder> {
-    Ok(
-        session_builder.with_execution_providers([ep::CPUExecutionProvider::default()
+fn configure_cpu(session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
+    session_builder
+        .with_execution_providers([ep::CPUExecutionProvider::default()
             .with_arena_allocator(true)
-            .build()])?,
-    )
+            .build()])
+        .map_err(builder_error)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
@@ -170,10 +184,10 @@ fn try_configure_execution_provider(
     }
 }
 
-fn tensorrt_execution_provider(engine_cache_path: &str) -> ExecutionProviderDispatch {
+fn tensorrt_execution_provider(engine_cache_path: &Path) -> ExecutionProviderDispatch {
     ep::TensorRTExecutionProvider::default()
         .with_engine_cache(true)
-        .with_engine_cache_path(engine_cache_path)
+        .with_engine_cache_path(engine_cache_path.to_string_lossy())
         .with_fp16(true)
         .build()
         .error_on_failure()
@@ -194,10 +208,11 @@ fn cuda_execution_provider() -> ExecutionProviderDispatch {
 
 fn configure_tensorrt_strict(
     session_builder: SessionBuilder,
-    engine_cache_path: &str,
-) -> RbtResult<SessionBuilder> {
-    Ok(session_builder
-        .with_execution_providers([tensorrt_execution_provider(engine_cache_path)])?)
+    engine_cache_path: &Path,
+) -> Result<SessionBuilder, OrtEpError> {
+    session_builder
+        .with_execution_providers([tensorrt_execution_provider(engine_cache_path)])
+        .map_err(builder_error)
 }
 
 #[cfg(any(
@@ -207,8 +222,10 @@ fn configure_tensorrt_strict(
     ),
     all(target_os = "windows", target_arch = "x86_64")
 ))]
-fn configure_cuda_strict(session_builder: SessionBuilder) -> RbtResult<SessionBuilder> {
-    Ok(session_builder.with_execution_providers([cuda_execution_provider()])?)
+fn configure_cuda_strict(session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
+    session_builder
+        .with_execution_providers([cuda_execution_provider()])
+        .map_err(builder_error)
 }
 
 #[cfg(not(any(
@@ -218,8 +235,8 @@ fn configure_cuda_strict(session_builder: SessionBuilder) -> RbtResult<SessionBu
     ),
     all(target_os = "windows", target_arch = "x86_64")
 )))]
-fn configure_cuda_strict(_session_builder: SessionBuilder) -> RbtResult<SessionBuilder> {
-    Err(RbtError::UnsupportedExecutionProvider(
+fn configure_cuda_strict(_session_builder: SessionBuilder) -> Result<SessionBuilder, OrtEpError> {
+    Err(OrtEpError::UnsupportedExecutionProvider(
         "CUDA is only enabled for aarch64/x86_64 Linux and x86_64 Windows targets".to_string(),
     ))
 }
@@ -227,8 +244,8 @@ fn configure_cuda_strict(_session_builder: SessionBuilder) -> RbtResult<SessionB
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 fn configure_auto_session_builder(
     session_builder: SessionBuilder,
-    engine_cache_path: &str,
-) -> RbtResult<(SessionBuilder, OrtExecutionProvider)> {
+    engine_cache_path: &Path,
+) -> Result<(SessionBuilder, OrtExecutionProvider), OrtEpError> {
     let mut session_builder = session_builder;
     if linux_aarch64_tensorrt_stack_available() {
         match try_configure_execution_provider(
@@ -257,8 +274,8 @@ fn configure_auto_session_builder(
 #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn configure_auto_session_builder(
     session_builder: SessionBuilder,
-    engine_cache_path: &str,
-) -> RbtResult<(SessionBuilder, OrtExecutionProvider)> {
+    engine_cache_path: &Path,
+) -> Result<(SessionBuilder, OrtExecutionProvider), OrtEpError> {
     let provider = default_execution_provider();
     let session_builder = match provider {
         OrtExecutionProvider::CoreML => configure_coreml(session_builder, engine_cache_path)?,
@@ -270,6 +287,10 @@ fn configure_auto_session_builder(
         OrtExecutionProvider::CPU => configure_cpu(session_builder)?,
     };
     Ok((session_builder, provider))
+}
+
+fn builder_error(err: ort::Error<SessionBuilder>) -> OrtEpError {
+    OrtEpError::OrtBuilder(err.to_string())
 }
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
@@ -286,9 +307,7 @@ fn linux_aarch64_cuda_available() -> bool {
         "/usr/local/cuda/targets/aarch64-linux/lib",
     ];
 
-    CUDA_DIRS
-        .iter()
-        .any(|path| std::path::Path::new(path).exists())
+    CUDA_DIRS.iter().any(|path| Path::new(path).exists())
         || CUDA_LIB_DIRS
             .iter()
             .any(|dir| directory_has_any_library(dir, &["libcuda.so", "libcudart.so"]))
@@ -379,6 +398,10 @@ mod tests {
         );
         assert_eq!(
             resolve_execution_provider("TensorRT"),
+            Some(OrtExecutionProvider::TensorRT)
+        );
+        assert_eq!(
+            resolve_execution_provider("trt"),
             Some(OrtExecutionProvider::TensorRT)
         );
         assert_eq!(

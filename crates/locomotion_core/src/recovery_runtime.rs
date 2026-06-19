@@ -99,7 +99,7 @@ impl Default for RecoveryRuntimeConfig {
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
             baudrate: 921600,
-            device: "cpu".to_string(),
+            device: "auto".to_string(),
             rate_hz: 50.0,
             state_timeout_s: 0.10,
             write_timeout_s: 0.02,

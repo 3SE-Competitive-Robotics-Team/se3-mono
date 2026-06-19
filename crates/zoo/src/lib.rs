@@ -203,7 +203,7 @@ mod tests {
         let mut cloned = get_robot("serial_leg_dev").unwrap();
         cloned.locomotion.rate_hz = 60.0;
         cloned.locomotion.robot_cfg.leg_kp = 75.0;
-        cloned.policies[0].ort_ep = "cpu".to_string();
+        cloned.policies[0].ort_ep = "auto".to_string();
         cloned.policies[0].action_decoder_profile.robot_cfg.leg_kp = 12.0;
 
         let fresh = get_robot("serial_leg_dev").unwrap();
