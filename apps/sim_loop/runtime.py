@@ -22,7 +22,7 @@ from .rerun_viewer import RerunSimViewer, RerunSimViewerConfig
 class SimViewer(Protocol):
     def is_running(self) -> bool: ...
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None: ...
+    def sync(self, *, step: int, target: PolicyTargetFrame, ctrl: np.ndarray) -> None: ...
 
 
 @dataclass(slots=True)
@@ -81,7 +81,7 @@ class SimLoopRuntime:
                         np.asarray(target.wheel_vel, dtype=np.float64),
                     )
                     self.mj.step()
-                    viewer.sync(step=steps, ctrl=ctrl)
+                    viewer.sync(step=steps, target=target, ctrl=ctrl)
                     if peer_path is not None:
                         state = self.mj.state_frame(
                             seq=steps & 0xFFFFFFFF,
@@ -184,7 +184,7 @@ class NullSimViewer:
     def is_running(self) -> bool:
         return True
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+    def sync(self, *, step: int, target: PolicyTargetFrame, ctrl: np.ndarray) -> None:
         return
 
 
@@ -195,7 +195,7 @@ class MujocoSimViewer:
     def is_running(self) -> bool:
         return bool(self._viewer.is_running())
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+    def sync(self, *, step: int, target: PolicyTargetFrame, ctrl: np.ndarray) -> None:
         self._viewer.sync()
 
 
@@ -208,5 +208,5 @@ class RerunRuntimeViewer:
     def is_running(self) -> bool:
         return True
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
-        self._viewer.log_state(self._model, self._data, step=step, ctrl=ctrl)
+    def sync(self, *, step: int, target: PolicyTargetFrame, ctrl: np.ndarray) -> None:
+        self._viewer.log_state(self._model, self._data, step=step, target=target, ctrl=ctrl)

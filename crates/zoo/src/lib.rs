@@ -209,13 +209,14 @@ fn serial_leg_gamepad_command(
     snapshot: &GamepadSnapshot,
     profile: &GamepadCommandProfile,
 ) -> Command {
-    let default_height = 0.22;
+    let default_height = RobotConfig::default().default_base_height as f32;
+    let idle = ChassisCommand::idle(default_height);
     if profile.require_enable_button && !snapshot.right_bumper {
-        return Command::chassis(ChassisCommand::idle(default_height));
+        return Command::chassis(idle);
     }
 
     let vx = apply_deadzone(snapshot.left_stick_y, profile.deadzone) * profile.limits.max_vx_mps;
-    let yaw_rate = apply_deadzone(snapshot.right_stick_x, profile.deadzone)
+    let yaw_rate = -apply_deadzone(snapshot.right_stick_x, profile.deadzone)
         * profile.limits.max_yaw_rate_rad_s;
     let height_delta = if snapshot.dpad_y.abs() > 0.5 {
         snapshot.dpad_y.signum() * 0.02
@@ -242,7 +243,7 @@ fn serial_leg_gamepad_command(
         jump,
     }
     .validate(profile.limits)
-    .unwrap_or_else(|_| ChassisCommand::idle(default_height));
+    .unwrap_or(idle);
 
     Command {
         chassis: Some(chassis),
@@ -297,7 +298,25 @@ mod tests {
         });
         let chassis = enabled.chassis.unwrap();
         assert_eq!(chassis.vx_mps, gamepad.limits.max_vx_mps);
-        assert_eq!(chassis.yaw_rate_rad_s, -gamepad.limits.max_yaw_rate_rad_s);
+        assert_eq!(chassis.yaw_rate_rad_s, gamepad.limits.max_yaw_rate_rad_s);
+    }
+
+    #[test]
+    fn serial_leg_gamepad_idle_is_same_with_enable_held() {
+        let robot = serial_leg_dev();
+        let gamepad = robot.command.gamepad.as_ref().unwrap();
+        let snapshot = test_gamepad_snapshot();
+
+        let disabled = gamepad.command(&snapshot);
+        let enabled_idle = gamepad.command(&GamepadSnapshot {
+            right_bumper: true,
+            ..snapshot
+        });
+
+        assert_eq!(
+            enabled_idle.chassis.unwrap().to_policy_command(),
+            disabled.chassis.unwrap().to_policy_command()
+        );
     }
 
     #[test]

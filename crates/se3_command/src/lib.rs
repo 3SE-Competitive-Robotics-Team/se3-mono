@@ -88,6 +88,19 @@ impl ChassisCommand {
                 max: limits.max_height_m,
             });
         }
+        let jump = if self.jump.enabled {
+            JumpCommand {
+                target_height_m: self
+                    .jump
+                    .target_height_m
+                    .clamp(limits.min_height_m, limits.max_jump_target_height_m),
+                phase: self.jump.phase.clamp(0.0, 1.0),
+                enabled: true,
+            }
+        } else {
+            JumpCommand::default()
+        };
+
         Ok(Self {
             vx_mps: self.vx_mps.clamp(-limits.max_vx_mps, limits.max_vx_mps),
             yaw_rate_rad_s: self
@@ -102,14 +115,7 @@ impl ChassisCommand {
             height_m: self
                 .height_m
                 .clamp(limits.min_height_m, limits.max_height_m),
-            jump: JumpCommand {
-                target_height_m: self
-                    .jump
-                    .target_height_m
-                    .clamp(limits.min_height_m, limits.max_jump_target_height_m),
-                phase: self.jump.phase.clamp(0.0, 1.0),
-                ..self.jump
-            },
+            jump,
         })
     }
 }
@@ -275,6 +281,22 @@ mod tests {
         assert_eq!(command.roll_rad, -0.4);
         assert_eq!(command.jump.target_height_m, 0.5);
         assert_eq!(command.jump.phase, 1.0);
+    }
+
+    #[test]
+    fn disabled_jump_validation_keeps_idle_jump_command() {
+        let limits = ChassisCommandLimits {
+            max_vx_mps: 1.0,
+            max_yaw_rate_rad_s: 2.0,
+            max_pitch_rad: 0.3,
+            max_roll_rad: 0.4,
+            min_height_m: 0.16,
+            max_height_m: 0.28,
+            max_jump_target_height_m: 0.5,
+        };
+        let command = ChassisCommand::idle(0.22).validate(limits).unwrap();
+
+        assert_eq!(command.jump, JumpCommand::default());
     }
 
     #[test]

@@ -8,6 +8,8 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
+from .protocol import PolicyTargetFrame
+
 _TF = "tf#"
 _VISUAL_CONTYPE = 0
 _VISUAL_CONAFFINITY = 0
@@ -74,6 +76,7 @@ class RerunSimViewer:
         data: mujoco.MjData,
         *,
         step: int,
+        target: PolicyTargetFrame,
         ctrl: np.ndarray,
     ) -> None:
         if not self.body_paths:
@@ -89,6 +92,8 @@ class RerunSimViewer:
                 ),
             )
         rr.log("/metrics/base_height", rr.Scalars(float(data.qpos[2])))
+        for idx, value in enumerate((*target.joint_pos, *target.wheel_vel)):
+            rr.log(f"/metrics/command/{idx}", rr.Scalars(float(value)))
         for idx, value in enumerate(ctrl):
             rr.log(f"/metrics/ctrl/{idx}", rr.Scalars(float(value)))
 
@@ -99,6 +104,7 @@ def _blueprint() -> rrb.Blueprint:
             rrb.Spatial3DView(origin="/world", name="MuJoCo"),
             rrb.Vertical(
                 rrb.TimeSeriesView(origin="/metrics/base_height", name="Base height"),
+                rrb.TimeSeriesView(origin="/metrics/command", name="Command"),
                 rrb.TimeSeriesView(origin="/metrics/ctrl", name="Motor torque"),
             ),
             column_shares=[3, 2],
