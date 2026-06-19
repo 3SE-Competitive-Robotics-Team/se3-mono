@@ -32,6 +32,7 @@ class MujocoRuntime:
         if not cfg.model_path.exists():
             raise FileNotFoundError(f"MJCF model not found: {cfg.model_path}")
         self.model = self._build_model(cfg.model_path)
+        self.model.opt.timestep = 0.002  # 500 Hz
         self.data = mujoco.MjData(self.model)
         self.joint_names = (
             "lf0_Joint",

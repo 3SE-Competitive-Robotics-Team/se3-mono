@@ -78,7 +78,7 @@ pub fn synthetic_recovery_state(seq: u32) -> PolicyStateFrame {
     let dof_pos = robot_cfg.default_dof_pos.map(|v| v as f32);
     PolicyStateFrame {
         seq,
-        tick_ms: seq.wrapping_mul((robot_cfg.control_dt() * 1000.0) as u32),
+        tick_ms: seq.wrapping_mul(20), // 50 Hz → 20 ms per step
         target_seq: 0,
         target_age_ms: 0,
         target_valid: 0,
