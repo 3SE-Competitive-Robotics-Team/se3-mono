@@ -8,12 +8,41 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
-from .protocol import PolicyTargetFrame
+from .protocol import PolicyCommandFrame, PolicyTargetFrame
 
 _TF = "tf#"
 _VISUAL_CONTYPE = 0
 _VISUAL_CONAFFINITY = 0
 _COLLISION_GROUP = 3
+_ACTION_LEG_NAMES = (
+    "left_front_joint_pos",
+    "left_back_joint_pos",
+    "right_front_joint_pos",
+    "right_back_joint_pos",
+)
+_ACTION_WHEEL_NAMES = (
+    "left_wheel_vel",
+    "right_wheel_vel",
+)
+_COMMAND_NAMES = (
+    "vx_mps",
+    "yaw_rate_rad_s",
+    "pitch_rad",
+    "roll_rad",
+    "height_m",
+    "jump_enabled",
+    "jump_target_height_m",
+    "jump_phase",
+)
+_CTRL_NAMES = (
+    "left_front_hip_torque",
+    "left_back_hip_torque",
+    "right_front_hip_torque",
+    "right_back_hip_torque",
+    "left_wheel_torque",
+    "right_wheel_torque",
+)
+_WHEEL_RADIUS_M = 0.06
 
 _GEOM_COLORS = {
     "base": (72, 115, 180, 255),
@@ -76,6 +105,7 @@ class RerunSimViewer:
         data: mujoco.MjData,
         *,
         step: int,
+        command: PolicyCommandFrame,
         target: PolicyTargetFrame,
         ctrl: np.ndarray,
     ) -> None:
@@ -92,10 +122,15 @@ class RerunSimViewer:
                 ),
             )
         rr.log("/metrics/base_height", rr.Scalars(float(data.qpos[2])))
-        for idx, value in enumerate((*target.joint_pos, *target.wheel_vel)):
-            rr.log(f"/metrics/command/{idx}", rr.Scalars(float(value)))
-        for idx, value in enumerate(ctrl):
-            rr.log(f"/metrics/ctrl/{idx}", rr.Scalars(float(value)))
+        for name, value in zip(_COMMAND_NAMES, command.command, strict=True):
+            rr.log(f"/metrics/command/{name}", rr.Scalars(float(value)))
+        for name, value in zip(_ACTION_LEG_NAMES, target.joint_pos, strict=True):
+            rr.log(f"/metrics/action/joint_pos/{name}", rr.Scalars(float(value)))
+        for name, value in zip(_ACTION_WHEEL_NAMES, target.wheel_vel, strict=True):
+            rr.log(f"/metrics/action/wheel_vel_mps/{name}", rr.Scalars(float(value) * _WHEEL_RADIUS_M))
+            rr.log(f"/metrics/action/wheel_vel_rad_s/{name}", rr.Scalars(float(value)))
+        for name, value in zip(_CTRL_NAMES, ctrl, strict=True):
+            rr.log(f"/metrics/ctrl/{name}", rr.Scalars(float(value)))
 
 
 def _blueprint() -> rrb.Blueprint:
@@ -105,6 +140,13 @@ def _blueprint() -> rrb.Blueprint:
             rrb.Vertical(
                 rrb.TimeSeriesView(origin="/metrics/base_height", name="Base height"),
                 rrb.TimeSeriesView(origin="/metrics/command", name="Command"),
+                rrb.TimeSeriesView(origin="/metrics/action/joint_pos", name="Action joint target"),
+                rrb.TimeSeriesView(origin="/metrics/action/wheel_vel_mps", name="Action wheel m/s"),
+                rrb.TimeSeriesView(
+                    origin="/metrics/action/wheel_vel_rad_s",
+                    name="Action wheel rad/s",
+                    visible=False,
+                ),
                 rrb.TimeSeriesView(origin="/metrics/ctrl", name="Motor torque"),
             ),
             column_shares=[3, 2],

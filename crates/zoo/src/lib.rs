@@ -71,7 +71,6 @@ impl CommandProfile {
 #[derive(Debug, Clone)]
 pub struct GamepadCommandProfile {
     pub deadzone: f32,
-    pub require_enable_button: bool,
     pub limits: ChassisCommandLimits,
     pub map: fn(&GamepadSnapshot, &GamepadCommandProfile) -> Command,
 }
@@ -167,9 +166,8 @@ pub fn serial_leg_dev() -> RobotProfile {
             fixed: Command::chassis(ChassisCommand::idle(robot_cfg.default_base_height as f32)),
             gamepad: Some(GamepadCommandProfile {
                 deadzone: 0.12,
-                require_enable_button: true,
                 limits: ChassisCommandLimits {
-                    max_vx_mps: 0.8,
+                    max_vx_mps: 1.5,
                     max_yaw_rate_rad_s: 1.5,
                     max_pitch_rad: 0.0,
                     max_roll_rad: 0.0,
@@ -211,9 +209,6 @@ fn serial_leg_gamepad_command(
 ) -> Command {
     let default_height = RobotConfig::default().default_base_height as f32;
     let idle = ChassisCommand::idle(default_height);
-    if profile.require_enable_button && !snapshot.right_bumper {
-        return Command::chassis(idle);
-    }
 
     let vx = apply_deadzone(snapshot.left_stick_y, profile.deadzone) * profile.limits.max_vx_mps;
     let yaw_rate = -apply_deadzone(snapshot.right_stick_x, profile.deadzone)
@@ -279,43 +274,32 @@ mod tests {
     }
 
     #[test]
-    fn serial_leg_gamepad_requires_right_bumper() {
+    fn serial_leg_gamepad_maps_axes_without_enable_button() {
         let robot = serial_leg_dev();
         let gamepad = robot.command.gamepad.as_ref().unwrap();
         let snapshot = test_gamepad_snapshot();
 
-        let disabled = gamepad.command(&snapshot);
-        assert_eq!(
-            disabled.chassis.unwrap().to_policy_command(),
-            ChassisCommand::idle(0.22).to_policy_command()
-        );
-
-        let enabled = gamepad.command(&GamepadSnapshot {
-            right_bumper: true,
+        let command = gamepad.command(&GamepadSnapshot {
             left_stick_y: 1.0,
             right_stick_x: -1.0,
             ..snapshot
         });
-        let chassis = enabled.chassis.unwrap();
+        let chassis = command.chassis.unwrap();
         assert_eq!(chassis.vx_mps, gamepad.limits.max_vx_mps);
         assert_eq!(chassis.yaw_rate_rad_s, gamepad.limits.max_yaw_rate_rad_s);
     }
 
     #[test]
-    fn serial_leg_gamepad_idle_is_same_with_enable_held() {
+    fn serial_leg_gamepad_default_input_is_idle() {
         let robot = serial_leg_dev();
         let gamepad = robot.command.gamepad.as_ref().unwrap();
         let snapshot = test_gamepad_snapshot();
 
-        let disabled = gamepad.command(&snapshot);
-        let enabled_idle = gamepad.command(&GamepadSnapshot {
-            right_bumper: true,
-            ..snapshot
-        });
+        let command = gamepad.command(&snapshot);
 
         assert_eq!(
-            enabled_idle.chassis.unwrap().to_policy_command(),
-            disabled.chassis.unwrap().to_policy_command()
+            command.chassis.unwrap().to_policy_command(),
+            ChassisCommand::idle(0.22).to_policy_command()
         );
     }
 

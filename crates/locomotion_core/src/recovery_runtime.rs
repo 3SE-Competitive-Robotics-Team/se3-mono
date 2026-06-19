@@ -19,8 +19,8 @@ use crate::cdc::{CdcError, CdcSerial, cdc_port_disappeared, resolve_cdc_port};
 use crate::command::LocomotionCommand;
 use crate::ort_policy::{OrtPolicyError, OrtPolicyRuntime};
 use crate::protocol::{
-    MSG_POLICY_STATE, PolicyStateFrame, PolicyTargetFrame, ProtocolError, StreamParser,
-    decode_policy_state, pack_policy_target,
+    MSG_POLICY_STATE, PolicyCommandFrame, PolicyStateFrame, PolicyTargetFrame, ProtocolError,
+    StreamParser, decode_policy_state, pack_policy_command, pack_policy_target,
 };
 use crate::recovery_observation::{RecoveryObservationBuilder, synthetic_recovery_state};
 
@@ -462,8 +462,10 @@ impl RecoveryRuntime {
                     obs,
                     policy_inference_ms,
                     packet,
+                    command_packet,
                 } = self.step_from_state(state, age_s)?;
                 let write_started = Instant::now();
+                socket.send(&command_packet)?;
                 socket.send(&packet)?;
                 let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                 self.record_action(state, action, flags, policy_inference_ms);
@@ -592,6 +594,7 @@ impl RecoveryRuntime {
                         obs,
                         policy_inference_ms,
                         packet,
+                        command_packet: _,
                     } = self.step_from_state(state, age_s)?;
                     let write_started = Instant::now();
                     serial.write_all(&packet, self.cfg.write_timeout_s)?;
@@ -727,6 +730,7 @@ impl RecoveryRuntime {
             obs,
             policy_inference_ms,
             packet,
+            command_packet: self.make_command_packet()?,
         })
     }
 
@@ -830,6 +834,14 @@ impl RecoveryRuntime {
         };
         self.action_seq = self.action_seq.wrapping_add(1);
         Ok(pack_policy_target(&frame)?)
+    }
+
+    fn make_command_packet(&self) -> Result<Vec<u8>, RecoveryRuntimeError> {
+        let frame = PolicyCommandFrame {
+            seq: self.action_seq.wrapping_sub(1),
+            command: self.obs_builder.policy_command(),
+        };
+        Ok(pack_policy_command(&frame)?)
     }
 
     fn target_joint_pos_for_transport(&self, policy_joint_pos: [f32; 4]) -> [f32; 4] {
@@ -1156,6 +1168,7 @@ struct StepOutput {
     obs: Vec<f32>,
     policy_inference_ms: Option<f64>,
     packet: Vec<u8>,
+    command_packet: Vec<u8>,
 }
 
 pub enum LoadedPolicy {

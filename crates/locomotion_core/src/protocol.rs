@@ -7,6 +7,7 @@ pub const MAX_PAYLOAD_SIZE: usize = 160;
 pub const MSG_STATE: u8 = 0x01;
 pub const MSG_TARGET: u8 = 0x02;
 pub const MSG_LATENCY: u8 = 0x03;
+pub const MSG_COMMAND: u8 = 0x04;
 
 pub const MSG_POLICY_STATE: u8 = MSG_STATE;
 pub const MSG_POLICY_ACTION: u8 = MSG_TARGET;
@@ -18,6 +19,7 @@ const POLICY_STATE_V2_SIZE: usize = 124;
 const POLICY_STATE_SIZE: usize = 140;
 const POLICY_TARGET_SIZE: usize = 28;
 const POLICY_LATENCY_SIZE: usize = 12;
+const POLICY_COMMAND_SIZE: usize = 36;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ProtocolError {
@@ -257,6 +259,22 @@ impl PolicyLatencyFrame {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolicyCommandFrame {
+    pub seq: u32,
+    pub command: [f32; 8],
+}
+
+impl PolicyCommandFrame {
+    pub fn pack_payload(&self) -> Result<Vec<u8>, ProtocolError> {
+        finite_floats(&self.command, "command")?;
+        let mut out = Vec::with_capacity(POLICY_COMMAND_SIZE);
+        write_u32(&mut out, self.seq);
+        write_f32s(&mut out, &self.command);
+        Ok(out)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedMessage {
     pub msg_type: u8,
@@ -379,6 +397,10 @@ pub fn pack_policy_state(frame: &PolicyStateFrame) -> Result<Vec<u8>, ProtocolEr
 
 pub fn pack_policy_target(frame: &PolicyTargetFrame) -> Result<Vec<u8>, ProtocolError> {
     pack_message(MSG_TARGET, &frame.pack_payload()?, frame.seq as u16)
+}
+
+pub fn pack_policy_command(frame: &PolicyCommandFrame) -> Result<Vec<u8>, ProtocolError> {
+    pack_message(MSG_COMMAND, &frame.pack_payload()?, frame.seq as u16)
 }
 
 pub fn pack_policy_action(frame: &PolicyTargetFrame) -> Result<Vec<u8>, ProtocolError> {

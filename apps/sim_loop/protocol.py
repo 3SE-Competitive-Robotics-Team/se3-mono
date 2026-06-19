@@ -7,8 +7,10 @@ SOF = b"\xa5\x5a"
 VERSION = 1
 MSG_STATE = 0x01
 MSG_TARGET = 0x02
+MSG_COMMAND = 0x04
 POLICY_STATE_PAYLOAD_SIZE = struct.calcsize("<IIIH6B3f3f4f4f2f2f4f4f2f2f")
 POLICY_TARGET_PAYLOAD_SIZE = struct.calcsize("<I4f2f")
+POLICY_COMMAND_PAYLOAD_SIZE = struct.calcsize("<I8f")
 
 
 @dataclass(slots=True)
@@ -16,6 +18,12 @@ class PolicyTargetFrame:
     seq: int
     joint_pos: tuple[float, float, float, float]
     wheel_vel: tuple[float, float]
+
+
+@dataclass(slots=True)
+class PolicyCommandFrame:
+    seq: int
+    command: tuple[float, float, float, float, float, float, float, float]
 
 
 @dataclass(slots=True)
@@ -104,6 +112,27 @@ def unpack_policy_target(packet: bytes) -> PolicyTargetFrame:
         seq=seq,
         joint_pos=(values[0], values[1], values[2], values[3]),
         wheel_vel=(values[4], values[5]),
+    )
+
+
+def unpack_policy_command(packet: bytes) -> PolicyCommandFrame:
+    payload = _unpack_message(packet, MSG_COMMAND, POLICY_COMMAND_PAYLOAD_SIZE, seq_offset=0)
+    try:
+        seq, *values = struct.unpack("<I8f", payload)
+    except struct.error as exc:
+        raise ValueError("invalid payload encoding") from exc
+    return PolicyCommandFrame(
+        seq=seq,
+        command=(
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7],
+        ),
     )
 
 
