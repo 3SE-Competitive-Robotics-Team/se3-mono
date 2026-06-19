@@ -114,7 +114,6 @@ pub struct RobotConfig {
     pub action_scale: [f64; 6],
     pub action_clip: Option<f64>,
     pub sim_dt: f64,
-    pub control_decimation: usize,
     pub action_delay: ActionDelayConfig,
     pub termination: Termination,
 }
@@ -157,8 +156,7 @@ impl Default for RobotConfig {
                 45.0,
             ],
             action_clip: Some(1.0),
-            sim_dt: 0.005,
-            control_decimation: 4,
+            sim_dt: 0.002,
             action_delay: ActionDelayConfig::default(),
             termination: Termination::default(),
         }
@@ -166,10 +164,6 @@ impl Default for RobotConfig {
 }
 
 impl RobotConfig {
-    pub fn control_dt(&self) -> f64 {
-        self.sim_dt * self.control_decimation as f64
-    }
-
     pub fn default_active_rod_angles(&self) -> [f64; 2] {
         let [left_front, left_back] = self.active_rod_angle_coeffs[0];
         let [right_front, right_back] = self.active_rod_angle_coeffs[1];

@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--socket-path", type=Path, default=Path("/tmp/se3_sim_loop.sock"))
     parser.add_argument("--max-steps", type=int, default=0)
-    parser.add_argument("--rate-hz", type=float, default=50.0)
+    parser.add_argument("--rate-hz", type=float, default=500.0)
     parser.add_argument("--kp", type=float, default=40.0)
     parser.add_argument("--kd", type=float, default=2.0)
     parser.add_argument("--wheel-kd", type=float, default=0.5)
