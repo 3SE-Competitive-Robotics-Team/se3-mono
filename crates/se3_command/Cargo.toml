@@ -1,5 +1,5 @@
 [package]
-name = "zoo"
+name = "se3_command"
 version = "0.1.0"
 edition.workspace = true
 
@@ -7,7 +7,4 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-locomotion_core.workspace = true
-se3_command.workspace = true
-se3_input.workspace = true
 thiserror.workspace = true

@@ -3,9 +3,11 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use locomotion_core::recovery_runtime::{
-    DEFAULT_CDC_PORT, RecoveryRuntime, RecoveryRuntimeConfig, RecoveryTransport, env_int,
-    telemetry_log_path,
+    DEFAULT_CDC_PORT, RecoveryRuntime, RecoveryRuntimeConfig, RecoveryTransport,
+    RuntimeCommandSample, RuntimeCommandSource, env_int, telemetry_log_path,
 };
+use se3_command::{Command, CommandSourceKind};
+use se3_input::{GamepadInput, GamepadSelector, GamepadSnapshot, InputError};
 use zoo::RobotProfile;
 
 const DEFAULT_ROBOT_ID: &str = "serial_leg_dev";
@@ -24,6 +26,15 @@ struct Args {
 
     #[arg(long = "ort-ep")]
     ort_ep: Option<String>,
+
+    #[arg(long = "command-source", value_parser = parse_command_source)]
+    command_source: Option<CommandSourceKind>,
+
+    #[arg(long = "gamepad", default_value = "auto")]
+    gamepad: String,
+
+    #[arg(long = "list-gamepads")]
+    list_gamepads: bool,
 
     #[arg(long, value_parser = parse_transport, default_value = "cdc")]
     transport: RecoveryTransport,
@@ -85,9 +96,15 @@ fn main() {
 
 fn run_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    if args.list_gamepads {
+        list_gamepads(&args.gamepad)?;
+        return Ok(());
+    }
     let robot = zoo::get_robot(&args.robot)?;
     let policy = resolve_policy(&robot, args.policy.as_deref())?;
     eprintln!("selected robot={} policy={}", robot.id, policy.id);
+    let command_source_kind = args.command_source.unwrap_or(robot.command.default_source);
+    let command_source = build_command_source(&robot, command_source_kind, &args.gamepad)?;
 
     let checkpoint = args
         .checkpoint
@@ -96,6 +113,9 @@ fn run_main() -> Result<(), Box<dyn Error>> {
     let cfg = RecoveryRuntimeConfig {
         checkpoint: checkpoint.ok_or_else(missing_checkpoint_error)?,
         ort_ep: args.ort_ep.unwrap_or_else(|| policy.ort_ep.clone()),
+        command_source: command_source_kind,
+        fixed_command: robot.command.fixed,
+        robot_cfg: robot.locomotion.robot_cfg.clone(),
         transport: args.transport,
         port: args.port,
         sim_socket_path: args
@@ -123,9 +143,105 @@ fn run_main() -> Result<(), Box<dyn Error>> {
         telemetry_log_every: args.telemetry_log_every,
         telemetry_flush_every: args.telemetry_flush_every,
     };
-    let mut runtime = RecoveryRuntime::new(cfg)?;
+    let mut runtime = RecoveryRuntime::new_with_command_source(cfg, command_source)?;
     runtime.run()?;
     Ok(())
+}
+
+fn build_command_source(
+    robot: &RobotProfile,
+    source: CommandSourceKind,
+    gamepad_selector: &str,
+) -> Result<Box<dyn RuntimeCommandSource>, Box<dyn Error>> {
+    match source {
+        CommandSourceKind::Fixed => Ok(Box::new(FixedCommandSource::new(robot.command.fixed))),
+        CommandSourceKind::XInput => {
+            let profile = robot.command.gamepad.clone().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "robot `{}` does not define a gamepad command profile",
+                        robot.id
+                    ),
+                )
+            })?;
+            let selector = GamepadSelector::parse(gamepad_selector)?;
+            let input = GamepadInput::new(selector)?;
+            Ok(Box::new(GamepadCommandSource {
+                input,
+                profile,
+                fallback: robot.command.fixed,
+            }))
+        }
+    }
+}
+
+fn list_gamepads(selector: &str) -> Result<(), Box<dyn Error>> {
+    let selector = GamepadSelector::parse(selector)?;
+    let mut input = GamepadInput::new(selector)?;
+    let mut gamepads = Vec::new();
+    for _ in 0..20 {
+        gamepads = input.connected_gamepads();
+        if !gamepads.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if gamepads.is_empty() {
+        eprintln!("no connected gamepads");
+    } else {
+        for (id, name) in gamepads {
+            eprintln!("gamepad {id}: {name}");
+        }
+    }
+    Ok(())
+}
+
+struct FixedCommandSource {
+    command: Command,
+}
+
+impl FixedCommandSource {
+    fn new(command: Command) -> Self {
+        Self { command }
+    }
+}
+
+impl RuntimeCommandSource for FixedCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample {
+        RuntimeCommandSample::fixed(self.command)
+    }
+}
+
+struct GamepadCommandSource {
+    input: GamepadInput,
+    profile: zoo::GamepadCommandProfile,
+    fallback: Command,
+}
+
+impl RuntimeCommandSource for GamepadCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample {
+        match self.input.poll() {
+            Ok(snapshot) => self.sample_from_snapshot(&snapshot),
+            Err(InputError::NoConnectedGamepad) => RuntimeCommandSample::xinput_idle(self.fallback),
+            Err(err) => {
+                eprintln!("xinput sample failed: {err}");
+                RuntimeCommandSample::xinput_idle(self.fallback)
+            }
+        }
+    }
+}
+
+impl GamepadCommandSource {
+    fn sample_from_snapshot(&self, snapshot: &GamepadSnapshot) -> RuntimeCommandSample {
+        RuntimeCommandSample {
+            command: self.profile.command(snapshot),
+            source: CommandSourceKind::XInput,
+            active: snapshot.connected,
+            device_id: Some(snapshot.id),
+            device_name: Some(snapshot.name.clone()),
+        }
+    }
 }
 
 fn resolve_policy<'a>(
@@ -171,6 +287,10 @@ fn parse_transport(value: &str) -> Result<RecoveryTransport, String> {
         "sim" => Ok(RecoveryTransport::Sim),
         _ => Err(format!("unsupported transport: {value}")),
     }
+}
+
+fn parse_command_source(value: &str) -> Result<CommandSourceKind, String> {
+    CommandSourceKind::parse(value).map_err(|err| err.to_string())
 }
 
 fn default_telemetry_log_every() -> usize {

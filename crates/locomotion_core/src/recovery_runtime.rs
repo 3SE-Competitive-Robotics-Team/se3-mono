@@ -13,8 +13,10 @@ use thiserror::Error;
 use crate::fourbar::{output_to_policy_pos, output_to_policy_vel, policy_to_output_pos};
 use crate::policy_io::{PolicyActionDecoderConfig, PolicyIoError};
 use crate::{ObservationConfig, PolicyActionDecoder, RobotConfig};
+use se3_command::{Command, CommandSourceKind};
 
 use crate::cdc::{CdcError, CdcSerial, cdc_port_disappeared, resolve_cdc_port};
+use crate::command::LocomotionCommand;
 use crate::ort_policy::{OrtPolicyError, OrtPolicyRuntime};
 use crate::protocol::{
     MSG_POLICY_STATE, PolicyStateFrame, PolicyTargetFrame, ProtocolError, StreamParser,
@@ -73,6 +75,9 @@ pub enum RecoveryTransport {
 pub struct RecoveryRuntimeConfig {
     pub checkpoint: PathBuf,
     pub ort_ep: String,
+    pub command_source: CommandSourceKind,
+    pub fixed_command: Command,
+    pub robot_cfg: RobotConfig,
     pub transport: RecoveryTransport,
     pub port: String,
     pub sim_socket_path: PathBuf,
@@ -95,6 +100,9 @@ impl Default for RecoveryRuntimeConfig {
         Self {
             checkpoint: PathBuf::new(),
             ort_ep: "auto".to_string(),
+            command_source: CommandSourceKind::Fixed,
+            fixed_command: Command::idle(RobotConfig::default().default_base_height as f32),
+            robot_cfg: RobotConfig::default(),
             transport: RecoveryTransport::Cdc,
             port: DEFAULT_CDC_PORT.to_string(),
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
@@ -233,15 +241,31 @@ pub struct RecoveryRuntime {
     last_print_monotonic: Instant,
     last_print_steps: usize,
     telemetry: TelemetryLogger,
+    command_source: Box<dyn RuntimeCommandSource>,
+    last_command_sample: RuntimeCommandSample,
 }
 
 impl RecoveryRuntime {
     pub fn new(cfg: RecoveryRuntimeConfig) -> Result<Self, RecoveryRuntimeError> {
+        let command_source = Box::new(FixedRuntimeCommandSource::new(cfg.fixed_command));
+        Self::new_with_command_source(cfg, command_source)
+    }
+
+    pub fn new_with_command_source(
+        cfg: RecoveryRuntimeConfig,
+        command_source: Box<dyn RuntimeCommandSource>,
+    ) -> Result<Self, RecoveryRuntimeError> {
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
-        let obs_builder = RecoveryObservationBuilder::new().with_num_obs(policy.num_obs());
-        let target_decoder = RecoveryActionTargetDecoder::new(obs_builder.command[4], None);
+        let initial_command = LocomotionCommand::from_command(cfg.fixed_command, &cfg.robot_cfg);
+        let mut obs_builder = RecoveryObservationBuilder::with_robot_config(cfg.robot_cfg.clone())
+            .with_num_obs(policy.num_obs());
+        obs_builder.set_command(initial_command);
+        let target_decoder = RecoveryActionTargetDecoder::new(
+            obs_builder.policy_command()[4],
+            Some(cfg.robot_cfg.clone()),
+        );
         let now = Instant::now();
         let session_id = format!("{}_{}", unix_time_s() as u64, std::process::id());
         let checkpoint_sha256 = sha256_file(&cfg.checkpoint)?;
@@ -278,13 +302,15 @@ impl RecoveryRuntime {
                 "num_obs": obs_cfg.num_obs,
                 "num_actions": obs_cfg.num_actions,
             },
-            "command": obs_builder.command,
+            "command": obs_builder.policy_command(),
+            "command_source": cfg.command_source.as_str(),
             "action_decoder": {
                 "height_conditioned_action_default": true,
                 "active_rod_semantics": true,
                 "command_height": target_decoder.command_height,
             }
         }))?;
+        let last_command_sample = RuntimeCommandSample::fixed(cfg.fixed_command);
         let mut runtime = Self {
             cfg,
             obs_cfg,
@@ -307,6 +333,8 @@ impl RecoveryRuntime {
             last_print_monotonic: now,
             last_print_steps: 0,
             telemetry,
+            command_source,
+            last_command_sample,
         };
         runtime.write_event("runtime_start", json!({}))?;
         Ok(runtime)
@@ -342,6 +370,7 @@ impl RecoveryRuntime {
             let loop_started = Instant::now();
             let state = synthetic_recovery_state(step as u32);
             self.stats.state_frames += 1;
+            self.sample_command();
             let (action, mut flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
             flags |= ACTION_FLAG_DRY_RUN;
             self.decode_target(action)?;
@@ -660,6 +689,7 @@ impl RecoveryRuntime {
         let obs;
         let action;
         let packet;
+        self.sample_command();
         if age_s > self.cfg.state_timeout_s {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
@@ -698,6 +728,15 @@ impl RecoveryRuntime {
             policy_inference_ms,
             packet,
         })
+    }
+
+    fn sample_command(&mut self) {
+        let sample = self.command_source.sample();
+        let command =
+            LocomotionCommand::from_command(sample.command, &self.target_decoder.robot_cfg);
+        self.target_decoder.command_height = command.chassis.height_m;
+        self.obs_builder.set_command(command);
+        self.last_command_sample = sample;
     }
 
     fn act_from_state(
@@ -923,7 +962,26 @@ impl RecoveryRuntime {
             "last_policy_reset_reason".to_string(),
             json!(self.last_policy_reset_reason),
         );
-        record.insert("command".to_string(), json!(self.obs_builder.command));
+        record.insert(
+            "command".to_string(),
+            json!(self.obs_builder.policy_command()),
+        );
+        record.insert(
+            "command_source".to_string(),
+            json!(self.last_command_sample.source.as_str()),
+        );
+        record.insert(
+            "command_active".to_string(),
+            json!(self.last_command_sample.active),
+        );
+        record.insert(
+            "command_device_id".to_string(),
+            json!(self.last_command_sample.device_id),
+        );
+        record.insert(
+            "command_device_name".to_string(),
+            json!(self.last_command_sample.device_name),
+        );
         record.insert(
             "checkpoint_sha256".to_string(),
             json!(self.checkpoint_sha256),
@@ -1380,6 +1438,9 @@ fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
     json!({
         "checkpoint": cfg.checkpoint,
         "ort_ep": cfg.ort_ep,
+        "command_source": cfg.command_source.as_str(),
+        "fixed_command": cfg.fixed_command.chassis.map(|command| command.to_policy_command()),
+        "robot_default_base_height": cfg.robot_cfg.default_base_height,
         "transport": match cfg.transport {
             RecoveryTransport::Cdc => "cdc",
             RecoveryTransport::Sim => "sim",
@@ -1449,6 +1510,58 @@ fn action_flag_names(flags: u32) -> Vec<&'static str> {
         names.push("output_disabled_hold");
     }
     names
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeCommandSample {
+    pub command: Command,
+    pub source: CommandSourceKind,
+    pub active: bool,
+    pub device_id: Option<usize>,
+    pub device_name: Option<String>,
+}
+
+impl RuntimeCommandSample {
+    pub fn fixed(command: Command) -> Self {
+        Self {
+            command,
+            source: CommandSourceKind::Fixed,
+            active: true,
+            device_id: None,
+            device_name: None,
+        }
+    }
+
+    pub fn xinput_idle(command: Command) -> Self {
+        Self {
+            command,
+            source: CommandSourceKind::XInput,
+            active: false,
+            device_id: None,
+            device_name: None,
+        }
+    }
+}
+
+pub trait RuntimeCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample;
+}
+
+#[derive(Debug)]
+pub struct FixedRuntimeCommandSource {
+    command: Command,
+}
+
+impl FixedRuntimeCommandSource {
+    pub fn new(command: Command) -> Self {
+        Self { command }
+    }
+}
+
+impl RuntimeCommandSource for FixedRuntimeCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample {
+        RuntimeCommandSample::fixed(self.command)
+    }
 }
 
 fn fmt_values(values: &[f32]) -> String {
@@ -1583,6 +1696,8 @@ mod tests {
                 file: None,
                 written: 0,
             },
+            command_source: Box::new(FixedRuntimeCommandSource::new(Command::idle(0.22))),
+            last_command_sample: RuntimeCommandSample::fixed(Command::idle(0.22)),
         }
     }
 

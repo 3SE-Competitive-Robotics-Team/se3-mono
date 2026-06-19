@@ -5,6 +5,8 @@ members = [
     "apps/locomotion",
     "crates/auto_aim_core",
     "crates/locomotion_core",
+    "crates/se3_command",
+    "crates/se3_input",
     "crates/se3_ort_ep",
     "crates/zoo",
     "tools/replay_telemetry",
@@ -27,6 +29,7 @@ auto_aim_core = { path = "crates/auto_aim_core" }
 clap = { version = "4.5", features = ["derive"] }
 crossbeam-queue = "0.3.12"
 ctrlc = "3.5"
+gilrs = { version = "0.11.2", default-features = false, features = ["xinput"] }
 half = "2.7.1"
 image = "0.25.10"
 jiff = { version = "0.2.28", default-features = false, features = ["std", "tz-system"] }
@@ -43,6 +46,8 @@ ort = { version = "2.0.0-rc.12", features = ["tensorrt", "cuda", "openvino", "co
 rerun = "0.33.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+se3_command = { path = "crates/se3_command" }
+se3_input = { path = "crates/se3_input" }
 se3_ort_ep = { path = "crates/se3_ort_ep" }
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }

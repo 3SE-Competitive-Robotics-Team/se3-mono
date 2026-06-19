@@ -3,6 +3,10 @@
 use std::path::PathBuf;
 
 use locomotion_core::{PolicyObservationConfig, RobotConfig, policy_io::PolicyActionDecoderConfig};
+use se3_command::{
+    ChassisCommand, ChassisCommandLimits, Command, CommandSourceKind, GimbalCommand, JumpCommand,
+};
+use se3_input::{GamepadSnapshot, apply_deadzone};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -10,6 +14,7 @@ pub struct RobotProfile {
     pub id: String,
     pub kind: String,
     pub locomotion: LocomotionProfile,
+    pub command: CommandProfile,
     pub sim: SimProfile,
     pub policies: Vec<PolicyProfile>,
 }
@@ -44,6 +49,37 @@ pub struct LocomotionProfile {
     pub write_timeout_s: f64,
     pub default_policy_id: String,
     pub robot_cfg: RobotConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandProfile {
+    pub default_source: CommandSourceKind,
+    pub fixed: Command,
+    pub gamepad: Option<GamepadCommandProfile>,
+}
+
+impl CommandProfile {
+    pub fn fixed_chassis(height_m: f32) -> Self {
+        Self {
+            default_source: CommandSourceKind::Fixed,
+            fixed: Command::chassis(ChassisCommand::idle(height_m)),
+            gamepad: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GamepadCommandProfile {
+    pub deadzone: f32,
+    pub require_enable_button: bool,
+    pub limits: ChassisCommandLimits,
+    pub map: fn(&GamepadSnapshot, &GamepadCommandProfile) -> Command,
+}
+
+impl GamepadCommandProfile {
+    pub fn command(&self, snapshot: &GamepadSnapshot) -> Command {
+        (self.map)(snapshot, self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +162,24 @@ pub fn serial_leg_dev() -> RobotProfile {
             default_policy_id: default_policy_id.clone(),
             robot_cfg: robot_cfg.clone(),
         },
+        command: CommandProfile {
+            default_source: CommandSourceKind::Fixed,
+            fixed: Command::chassis(ChassisCommand::idle(robot_cfg.default_base_height as f32)),
+            gamepad: Some(GamepadCommandProfile {
+                deadzone: 0.12,
+                require_enable_button: true,
+                limits: ChassisCommandLimits {
+                    max_vx_mps: 0.8,
+                    max_yaw_rate_rad_s: 1.5,
+                    max_pitch_rad: 0.0,
+                    max_roll_rad: 0.0,
+                    min_height_m: 0.16,
+                    max_height_m: 0.28,
+                    max_jump_target_height_m: 0.35,
+                },
+                map: serial_leg_gamepad_command,
+            }),
+        },
         sim: SimProfile {
             model_path: PathBuf::from(
                 "assets/robots/serial_leg/mjcf/serialleg_fourbar_surrogate_train.xml",
@@ -151,6 +205,51 @@ pub fn serial_leg_dev() -> RobotProfile {
     }
 }
 
+fn serial_leg_gamepad_command(
+    snapshot: &GamepadSnapshot,
+    profile: &GamepadCommandProfile,
+) -> Command {
+    let default_height = 0.22;
+    if profile.require_enable_button && !snapshot.right_bumper {
+        return Command::chassis(ChassisCommand::idle(default_height));
+    }
+
+    let vx = apply_deadzone(snapshot.left_stick_y, profile.deadzone) * profile.limits.max_vx_mps;
+    let yaw_rate = apply_deadzone(snapshot.right_stick_x, profile.deadzone)
+        * profile.limits.max_yaw_rate_rad_s;
+    let height_delta = if snapshot.dpad_y.abs() > 0.5 {
+        snapshot.dpad_y.signum() * 0.02
+    } else {
+        0.0
+    };
+    let height_m = (default_height + height_delta)
+        .clamp(profile.limits.min_height_m, profile.limits.max_height_m);
+    let jump = JumpCommand {
+        enabled: snapshot.south,
+        target_height_m: if snapshot.south {
+            profile.limits.max_jump_target_height_m
+        } else {
+            0.0
+        },
+        phase: 0.0,
+    };
+    let chassis = ChassisCommand {
+        vx_mps: vx,
+        yaw_rate_rad_s: yaw_rate,
+        pitch_rad: 0.0,
+        roll_rad: 0.0,
+        height_m,
+        jump,
+    }
+    .validate(profile.limits)
+    .unwrap_or_else(|_| ChassisCommand::idle(default_height));
+
+    Command {
+        chassis: Some(chassis),
+        gimbal: None::<GimbalCommand>,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
@@ -173,7 +272,32 @@ mod tests {
             PathBuf::from("/tmp/se3_locomotion.sock")
         );
         assert_eq!(robot.sim.rate_hz, 500.0);
+        assert_eq!(robot.command.default_source, CommandSourceKind::Fixed);
+        assert!(robot.command.gamepad.is_some());
         assert!(robot.policy("recovery_default").is_ok());
+    }
+
+    #[test]
+    fn serial_leg_gamepad_requires_right_bumper() {
+        let robot = serial_leg_dev();
+        let gamepad = robot.command.gamepad.as_ref().unwrap();
+        let snapshot = test_gamepad_snapshot();
+
+        let disabled = gamepad.command(&snapshot);
+        assert_eq!(
+            disabled.chassis.unwrap().to_policy_command(),
+            ChassisCommand::idle(0.22).to_policy_command()
+        );
+
+        let enabled = gamepad.command(&GamepadSnapshot {
+            right_bumper: true,
+            left_stick_y: 1.0,
+            right_stick_x: -1.0,
+            ..snapshot
+        });
+        let chassis = enabled.chassis.unwrap();
+        assert_eq!(chassis.vx_mps, gamepad.limits.max_vx_mps);
+        assert_eq!(chassis.yaw_rate_rad_s, -gamepad.limits.max_yaw_rate_rad_s);
     }
 
     #[test]
@@ -219,5 +343,33 @@ mod tests {
             fresh_policy.action_decoder_profile.robot_cfg.leg_kp,
             RobotConfig::default().leg_kp
         );
+    }
+
+    fn test_gamepad_snapshot() -> GamepadSnapshot {
+        GamepadSnapshot {
+            id: 0,
+            name: "test".to_string(),
+            connected: true,
+            left_stick_x: 0.0,
+            left_stick_y: 0.0,
+            right_stick_x: 0.0,
+            right_stick_y: 0.0,
+            left_trigger: 0.0,
+            right_trigger: 0.0,
+            dpad_x: 0.0,
+            dpad_y: 0.0,
+            south: false,
+            east: false,
+            north: false,
+            west: false,
+            left_bumper: false,
+            right_bumper: false,
+            select: false,
+            start: false,
+            mode: false,
+            left_thumb: false,
+            right_thumb: false,
+            sampled_at: std::time::Instant::now(),
+        }
     }
 }
