@@ -6,15 +6,24 @@ use locomotion_core::recovery_runtime::{
     DEFAULT_CDC_PORT, RecoveryRuntime, RecoveryRuntimeConfig, RecoveryTransport, env_int,
     telemetry_log_path,
 };
+use zoo::RobotProfile;
+
+const DEFAULT_ROBOT_ID: &str = "serial_leg_dev";
 
 #[derive(Debug, Parser)]
 #[command(about = "Run SerialLeg recovery-only policy runtime on Jetson Orin NX.")]
 struct Args {
+    #[arg(long, default_value = DEFAULT_ROBOT_ID)]
+    robot: String,
+
+    #[arg(long)]
+    policy: Option<String>,
+
     #[arg(long)]
     checkpoint: Option<PathBuf>,
 
-    #[arg(long = "ort-ep", default_value = "auto")]
-    ort_ep: String,
+    #[arg(long = "ort-ep")]
+    ort_ep: Option<String>,
 
     #[arg(long, value_parser = parse_transport, default_value = "cdc")]
     transport: RecoveryTransport,
@@ -22,14 +31,11 @@ struct Args {
     #[arg(long, default_value_t = default_port())]
     port: String,
 
-    #[arg(long = "sim-socket-path", default_value = "/tmp/se3_sim_loop.sock")]
-    sim_socket_path: PathBuf,
+    #[arg(long = "sim-socket-path")]
+    sim_socket_path: Option<PathBuf>,
 
-    #[arg(
-        long = "sim-client-socket-path",
-        default_value = "/tmp/se3_locomotion.sock"
-    )]
-    sim_client_socket_path: PathBuf,
+    #[arg(long = "sim-client-socket-path")]
+    sim_client_socket_path: Option<PathBuf>,
 
     #[arg(long, default_value_t = 921600)]
     baudrate: i32,
@@ -37,14 +43,14 @@ struct Args {
     #[arg(long, default_value = "cpu")]
     device: String,
 
-    #[arg(long = "rate-hz", default_value_t = 50.0)]
-    rate_hz: f64,
+    #[arg(long = "rate-hz")]
+    rate_hz: Option<f64>,
 
-    #[arg(long = "state-timeout-s", default_value_t = 0.10)]
-    state_timeout_s: f64,
+    #[arg(long = "state-timeout-s")]
+    state_timeout_s: Option<f64>,
 
-    #[arg(long = "write-timeout-s", default_value_t = 0.02)]
-    write_timeout_s: f64,
+    #[arg(long = "write-timeout-s")]
+    write_timeout_s: Option<f64>,
 
     #[arg(long = "max-steps", default_value_t = 0)]
     max_steps: usize,
@@ -79,26 +85,34 @@ fn main() {
 
 fn run_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let robot = zoo::get_robot(&args.robot)?;
+    let policy = resolve_policy(&robot, args.policy.as_deref())?;
+    eprintln!("selected robot={} policy={}", robot.id, policy.id);
+
     let checkpoint = args
         .checkpoint
-        .or_else(|| std::env::var_os("SE3_RECOVERY_CHECKPOINT").map(PathBuf::from));
+        .or_else(|| std::env::var_os("SE3_RECOVERY_CHECKPOINT").map(PathBuf::from))
+        .or_else(|| policy.checkpoint.clone());
     let cfg = RecoveryRuntimeConfig {
-        checkpoint: checkpoint.ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "missing --checkpoint or SE3_RECOVERY_CHECKPOINT",
-            )
-        })?,
-        ort_ep: args.ort_ep,
+        checkpoint: checkpoint.ok_or_else(missing_checkpoint_error)?,
+        ort_ep: args.ort_ep.unwrap_or_else(|| policy.ort_ep.clone()),
         transport: args.transport,
         port: args.port,
-        sim_socket_path: args.sim_socket_path,
-        sim_client_socket_path: args.sim_client_socket_path,
+        sim_socket_path: args
+            .sim_socket_path
+            .unwrap_or_else(|| robot.locomotion.sim_socket_path.clone()),
+        sim_client_socket_path: args
+            .sim_client_socket_path
+            .unwrap_or_else(|| robot.locomotion.sim_client_socket_path.clone()),
         baudrate: args.baudrate,
         device: args.device,
-        rate_hz: args.rate_hz,
-        state_timeout_s: args.state_timeout_s,
-        write_timeout_s: args.write_timeout_s,
+        rate_hz: args.rate_hz.unwrap_or(robot.locomotion.rate_hz),
+        state_timeout_s: args
+            .state_timeout_s
+            .unwrap_or(robot.locomotion.state_timeout_s),
+        write_timeout_s: args
+            .write_timeout_s
+            .unwrap_or(robot.locomotion.write_timeout_s),
         max_steps: args.max_steps,
         dry_run: args.dry_run,
         print_every: args.print_every,
@@ -112,6 +126,39 @@ fn run_main() -> Result<(), Box<dyn Error>> {
     let mut runtime = RecoveryRuntime::new(cfg)?;
     runtime.run()?;
     Ok(())
+}
+
+fn resolve_policy<'a>(
+    robot: &'a RobotProfile,
+    requested_policy_id: Option<&str>,
+) -> Result<&'a zoo::PolicyProfile, std::io::Error> {
+    match requested_policy_id {
+        Some(policy_id) => robot.policy(policy_id).map_err(|_| {
+            let available = robot
+                .policies
+                .iter()
+                .map(|policy| policy.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "unknown policy `{policy_id}` for robot `{}` (available: [{available}])",
+                    robot.id
+                ),
+            )
+        }),
+        None => robot
+            .default_policy()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.to_string())),
+    }
+}
+
+fn missing_checkpoint_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "missing checkpoint; provide --checkpoint, SE3_RECOVERY_CHECKPOINT, or zoo policy checkpoint",
+    )
 }
 
 fn default_port() -> String {

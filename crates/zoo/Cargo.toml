@@ -1,0 +1,11 @@
+[package]
+name = "zoo"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+locomotion_core.workspace = true
+thiserror.workspace = true

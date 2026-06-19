@@ -9,3 +9,4 @@ workspace = true
 [dependencies]
 clap.workspace = true
 locomotion_core.workspace = true
+zoo.workspace = true
