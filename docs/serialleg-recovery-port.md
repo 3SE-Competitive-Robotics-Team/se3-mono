@@ -7,9 +7,10 @@ Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 
 ## 架构分层
 
 - `apps/locomotion`: 真机 recovery 策略进程入口。
+- `apps/sim_loop`: 本地 MuJoCo 仿真循环入口，通过 Unix datagram 和 locomotion 闭环交换策略状态与动作目标。
 - `apps/replay_telemetry`: 回放 NX telemetry，并用同一个 ORT policy 复算动作。
 - `apps/visualize_cdc_state`: CDC/remote/synthetic 状态可视化入口。
-- `crates/locomotion_core`: SerialLeg 机器人参数、四连杆映射、观测构造、动作解码、CDC、帧协议、ORT policy、runtime、replay 和 viewer 逻辑。
+- `crates/locomotion_core`: SerialLeg 机器人参数、四连杆映射、观测构造、动作解码、CDC/sim transport、帧协议、ORT policy、runtime、replay 和 viewer 逻辑。
 - `scripts`: 面向操作员的启动、导出和 NX 时间同步脚本。
 - 模型和机器人资源不放入本仓库；运行时通过 `--checkpoint` 或 `SE3_RECOVERY_CHECKPOINT` 指向外部 ONNX。
 
@@ -36,12 +37,15 @@ Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 
 - Policy artifact: 外部 ONNX 文件，通过 `SE3_RECOVERY_CHECKPOINT=/path/to/model.onnx` 或 `--checkpoint /path/to/model.onnx` 指定。
 - Policy runtime: Rust `ort-rs` / ONNX Runtime
 - Runtime EP: `SE3_ORT_EP=auto|cpu|coreml|openvino|tensorrt`
+- Local sim entry: `uv run se3-sim-loop --model <MJCF>`
+- Local sim transport: Unix datagram，默认 sim socket 为 `/tmp/se3_sim_loop.sock`，locomotion client socket 为 `/tmp/se3_locomotion.sock`
 - Time sync helper: `scripts/fix_time_and_pull.sh`
 - CDC visualizer: `scripts/visualize_cdc_state.sh`
 - CDC visualizer URL: `http://<nx-ip>:8081` 或 `ssh -L 8081:127.0.0.1:8081 serialleg-nx`
 - Local viewer URL: `http://127.0.0.1:8097`
 - USB CDC device: `auto`，优先 `/dev/ttyACM*`，其次 `/dev/ttyUSB*`
 - Policy rate: `50 Hz`
+- Sim loop rate: `500 Hz`
 - STM32 protocol: `A5 5A` framed CDC protocol, version `1`
 - STM32 control loop expectation: `1 kHz` local PD / output loop
 
@@ -57,6 +61,31 @@ SE3_RECOVERY_CHECKPOINT=/path/to/model_4999_recovery_gru.onnx ./scripts/run_reco
 ./scripts/visualize_cdc_state.sh --synthetic --no-mjcf-render --viewer-port 8097
 cargo run -p replay_telemetry -- logs/telemetry/example.jsonl --checkpoint /path/to/model_4999_recovery_gru.onnx
 ```
+
+## 本地 MuJoCo 闭环
+
+`sim_loop` 负责按 MuJoCo 状态生成 `PolicyStateFrame`，locomotion 使用 `--transport sim` 读取状态、执行 ONNX policy，再回写 `PolicyTargetFrame`。`sim_loop` 的默认频率是 `500 Hz`，locomotion policy 默认仍是 `50 Hz`。实际 10:1 节拍差来自两个进程的运行频率，不再依赖 `control_decimation` 这类配置字段。
+
+最小闭环：
+
+```bash
+uv run se3-sim-loop --model <MJCF> --socket-path /tmp/se3_sim_loop.sock
+cargo run -p locomotion -- --transport sim --checkpoint <ONNX> --max-steps 100
+```
+
+需要改 socket 时，两端必须匹配：
+
+```bash
+uv run se3-sim-loop --model <MJCF> --socket-path /tmp/se3_sim_loop.sock
+cargo run -p locomotion -- --transport sim \
+  --sim-socket-path /tmp/se3_sim_loop.sock \
+  --sim-client-socket-path /tmp/se3_locomotion.sock \
+  --checkpoint <ONNX>
+```
+
+`sim_loop` 的 viewer 默认关闭。需要可视化时可传 `--viewer rerun` 或 `--viewer mujoco`；macOS 上 MuJoCo 原生 viewer 通常需要用 `mjpython` 环境启动。
+
+当前策略状态包包含 `target_joint_pos`、`hip_torque`、`wheel_torque` 和 `wheel_motor_torque`。Rust 解码器仍兼容旧的 v1/v2 state payload，缺失字段按 `0.0` 填充；新仿真闭环按完整字段写出。
 
 ## NX 调试 Workflow
 
