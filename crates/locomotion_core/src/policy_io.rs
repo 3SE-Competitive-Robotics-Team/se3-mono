@@ -25,7 +25,7 @@ pub struct DecodedPolicyAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyObservationResult {
-    pub obs: [f32; 32],
+    pub obs: Vec<f32>,
     pub had_nonfinite_input: bool,
 }
 
@@ -201,6 +201,7 @@ pub struct PolicyObservationConfig {
     pub clip_value: Option<f32>,
     pub fourbar_surrogate: bool,
     pub normalize_projected_gravity: bool,
+    pub phase_active_leg_observation: bool,
 }
 
 impl Default for PolicyObservationConfig {
@@ -211,6 +212,7 @@ impl Default for PolicyObservationConfig {
             clip_value: None,
             fourbar_surrogate: false,
             normalize_projected_gravity: true,
+            phase_active_leg_observation: true,
         }
     }
 }
@@ -249,7 +251,7 @@ pub fn build_policy_observation(
     }
 
     let scale = config.command_scale.unwrap_or(obs_cfg.command_scale);
-    let mut obs = Vec::with_capacity(32);
+    let mut obs = Vec::with_capacity(34);
     obs.extend(base_ang_vel_body.map(|v| v * obs_cfg.ang_vel_scale));
     obs.extend(projected_gravity);
     for idx in 0..5 {
@@ -287,8 +289,16 @@ pub fn build_policy_observation(
             leg_vel,
         );
     }
-    for idx in 0..4 {
-        obs.push((leg_pos[idx] - default_leg_pos[idx]) as f32);
+    if config.phase_active_leg_observation {
+        obs.extend(policy_leg_phase_active_obs(
+            leg_pos,
+            default_leg_pos,
+            RobotConfig::default().active_rod_angle_coeffs,
+        ));
+    } else {
+        for idx in 0..4 {
+            obs.push((leg_pos[idx] - default_leg_pos[idx]) as f32);
+        }
     }
     for vel in leg_vel {
         obs.push(vel as f32 * obs_cfg.leg_vel_scale);
@@ -311,9 +321,9 @@ pub fn build_policy_observation(
         });
     }
     let limit = config.clip_value.unwrap_or(obs_cfg.clip_value);
-    let mut out = [0.0_f32; 32];
-    for (idx, value) in obs.into_iter().enumerate() {
-        out[idx] = if value.is_nan() {
+    let mut out = Vec::with_capacity(expected);
+    for value in obs {
+        out.push(if value.is_nan() {
             0.0
         } else if value.is_infinite() && value.is_sign_positive() {
             limit
@@ -321,12 +331,34 @@ pub fn build_policy_observation(
             -limit
         } else {
             value.clamp(-limit, limit)
-        };
+        });
     }
     Ok(PolicyObservationResult {
         obs: out,
         had_nonfinite_input: had_nonfinite,
     })
+}
+
+fn policy_leg_phase_active_obs(
+    pos: [f64; 4],
+    default: [f64; 4],
+    coeffs: [[f64; 2]; 2],
+) -> [f32; 6] {
+    let front_delta = [pos[0] - default[0], pos[2] - default[2]];
+    let active_delta = [
+        coeffs[0][0] * pos[0] + coeffs[0][1] * pos[1]
+            - (coeffs[0][0] * default[0] + coeffs[0][1] * default[1]),
+        coeffs[1][0] * pos[2] + coeffs[1][1] * pos[3]
+            - (coeffs[1][0] * default[2] + coeffs[1][1] * default[3]),
+    ];
+    [
+        front_delta[0].sin() as f32,
+        front_delta[0].cos() as f32,
+        active_delta[0] as f32,
+        front_delta[1].sin() as f32,
+        front_delta[1].cos() as f32,
+        active_delta[1] as f32,
+    ]
 }
 
 fn finite_array<const N: usize>(values: [f32; N]) -> ([f32; N], bool) {

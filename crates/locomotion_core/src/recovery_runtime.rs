@@ -1,5 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -39,17 +41,41 @@ pub enum RecoveryRuntimeError {
     PolicyIo(#[from] PolicyIoError),
     #[error("unsupported checkpoint type: {0}")]
     UnsupportedCheckpoint(PathBuf),
+    #[error("sim transport failed to bind client socket {client_socket_path}")]
+    SimSocketBind {
+        client_socket_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "sim transport failed to connect to sim_loop socket {sim_socket_path}; start se3-sim-loop first with the same --socket-path, or pass a matching --sim-socket-path (client socket: {client_socket_path})"
+    )]
+    SimSocketConnect {
+        sim_socket_path: PathBuf,
+        client_socket_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("io failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("json failed: {0}")]
     Json(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryTransport {
+    Cdc,
+    Sim,
+}
+
 #[derive(Debug, Clone)]
 pub struct RecoveryRuntimeConfig {
     pub checkpoint: PathBuf,
     pub ort_ep: String,
+    pub transport: RecoveryTransport,
     pub port: String,
+    pub sim_socket_path: PathBuf,
+    pub sim_client_socket_path: PathBuf,
     pub baudrate: i32,
     pub device: String,
     pub rate_hz: f64,
@@ -68,7 +94,10 @@ impl Default for RecoveryRuntimeConfig {
         Self {
             checkpoint: PathBuf::new(),
             ort_ep: "auto".to_string(),
+            transport: RecoveryTransport::Cdc,
             port: DEFAULT_CDC_PORT.to_string(),
+            sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
+            sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
             baudrate: 921600,
             device: "cpu".to_string(),
             rate_hz: 50.0,
@@ -209,7 +238,7 @@ impl RecoveryRuntime {
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
-        let obs_builder = RecoveryObservationBuilder::new();
+        let obs_builder = RecoveryObservationBuilder::new().with_num_obs(policy.num_obs());
         let target_decoder = RecoveryActionTargetDecoder::new(obs_builder.command[4], None);
         let now = Instant::now();
         let session_id = format!("{}_{}", unix_time_s() as u64, std::process::id());
@@ -290,6 +319,8 @@ impl RecoveryRuntime {
         );
         let result = if self.cfg.dry_run {
             self.run_dry()
+        } else if self.cfg.transport == RecoveryTransport::Sim {
+            self.run_sim()
         } else {
             self.run_cdc()
         };
@@ -326,6 +357,109 @@ impl RecoveryRuntime {
             )?;
             self.maybe_print();
         }
+        Ok(())
+    }
+
+    fn run_sim(&mut self) -> Result<(), RecoveryRuntimeError> {
+        let max_steps = self.cfg.max_steps;
+        let state_timeout =
+            Duration::try_from_secs_f64(self.cfg.state_timeout_s).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "state-timeout-s must be a finite non-negative duration: {} ({err})",
+                        self.cfg.state_timeout_s
+                    ),
+                )
+            })?;
+        self.reset_policy_memory(true, "sim_connect")?;
+        unlink_socket_path_if_present(&self.cfg.sim_client_socket_path)?;
+        let client_socket_guard = SocketPathGuard::new(self.cfg.sim_client_socket_path.clone());
+        let socket = match UnixDatagram::bind(&self.cfg.sim_client_socket_path) {
+            Ok(socket) => socket,
+            Err(err) => {
+                return Err(RecoveryRuntimeError::SimSocketBind {
+                    client_socket_path: self.cfg.sim_client_socket_path.clone(),
+                    source: err,
+                });
+            }
+        };
+        if let Err(err) = socket.connect(&self.cfg.sim_socket_path) {
+            return Err(RecoveryRuntimeError::SimSocketConnect {
+                sim_socket_path: self.cfg.sim_socket_path.clone(),
+                client_socket_path: self.cfg.sim_client_socket_path.clone(),
+                source: err,
+            });
+        }
+        socket.set_read_timeout(Some(state_timeout))?;
+        self.resolved_port = Some(self.cfg.sim_socket_path.to_string_lossy().into_owned());
+        self.write_event(
+            "sim_open",
+            json!({
+                "sim_socket_path": self.cfg.sim_socket_path,
+                "sim_client_socket_path": self.cfg.sim_client_socket_path,
+            }),
+        )?;
+        let handshake_state = synthetic_recovery_state(0);
+        let handshake = self.make_hold_target_packet(&handshake_state)?;
+        socket.send(&handshake)?;
+        let mut parser = StreamParser::default();
+        let mut buf = [0_u8; 4096];
+        while max_steps == 0 || self.stats.steps < max_steps {
+            let loop_started = Instant::now();
+            let n = match socket.recv(&mut buf) {
+                Ok(n) => n,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    self.stats.steps += 1;
+                    self.stats.timeout_frames += 1;
+                    self.maybe_print();
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            };
+            for message in parser.feed(&buf[..n]) {
+                if message.msg_type != MSG_POLICY_STATE {
+                    continue;
+                }
+                let state = decode_policy_state(&message)?;
+                self.stats.state_frames += 1;
+                self.stats.last_state_seq = state.seq;
+                let age_s = 0.0;
+                let StepOutput {
+                    action,
+                    flags,
+                    obs,
+                    policy_inference_ms,
+                    packet,
+                } = self.step_from_state(&state, age_s)?;
+                let write_started = Instant::now();
+                socket.send(&packet)?;
+                let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
+                self.record_action(&state, action, flags, policy_inference_ms);
+                self.write_telemetry(
+                    &state,
+                    &obs,
+                    &action,
+                    flags,
+                    TelemetryTiming {
+                        policy_inference_ms,
+                        state_age_s: Some(age_s),
+                        loop_started,
+                        write_ms: Some(write_ms),
+                    },
+                )?;
+                self.maybe_print();
+                if max_steps != 0 && self.stats.steps >= max_steps {
+                    break;
+                }
+            }
+        }
+        client_socket_guard.cleanup()?;
         Ok(())
     }
 
@@ -384,42 +518,13 @@ impl RecoveryRuntime {
                     let age_s = now
                         .saturating_duration_since(latest_state_time)
                         .as_secs_f64();
-                    let mut flags = 0_u32;
-                    let policy_inference_ms;
-                    let obs;
-                    let action;
-                    let packet;
-                    if age_s > self.cfg.state_timeout_s {
-                        self.reset_policy_memory(false, "state_timeout")?;
-                        action = [0.0; 6];
-                        flags |= ACTION_FLAG_TIMEOUT;
-                        let (built_obs, obs_flags) = self.build_observation(state)?;
-                        obs = built_obs;
-                        flags |= obs_flags;
-                        if obs_flags & ACTION_FLAG_NONFINITE != 0 {
-                            self.stats.nonfinite_frames += 1;
-                        }
-                        policy_inference_ms = None;
-                        packet = self.make_hold_target_packet(state)?;
-                    } else if state.output_enabled == 0 {
-                        self.reset_policy_memory(false, "output_disabled")?;
-                        let (built_obs, obs_flags) = self.build_observation(state)?;
-                        obs = built_obs;
-                        action = [0.0; 6];
-                        flags |= obs_flags | ACTION_FLAG_OUTPUT_DISABLED_HOLD;
-                        if obs_flags & ACTION_FLAG_NONFINITE != 0 {
-                            self.stats.nonfinite_frames += 1;
-                        }
-                        policy_inference_ms = None;
-                        packet = self.make_hold_target_packet(state)?;
-                    } else {
-                        let result = self.act_from_state(state)?;
-                        action = result.0;
-                        flags = result.1;
-                        obs = result.2;
-                        policy_inference_ms = Some(result.3);
-                        packet = self.make_target_packet(action)?;
-                    }
+                    let StepOutput {
+                        action,
+                        flags,
+                        obs,
+                        policy_inference_ms,
+                        packet,
+                    } = self.step_from_state(state, age_s)?;
                     let write_started = Instant::now();
                     serial.write_all(&packet, self.cfg.write_timeout_s)?;
                     let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
@@ -496,7 +601,7 @@ impl RecoveryRuntime {
     fn build_observation(
         &self,
         state: &PolicyStateFrame,
-    ) -> Result<([f32; 32], u32), RecoveryRuntimeError> {
+    ) -> Result<(Vec<f32>, u32), RecoveryRuntimeError> {
         let result = self.obs_builder.build(state, self.last_action)?;
         let flags = if result.had_nonfinite_input {
             ACTION_FLAG_NONFINITE
@@ -506,10 +611,60 @@ impl RecoveryRuntime {
         Ok((result.obs, flags))
     }
 
+    fn step_from_state(
+        &mut self,
+        state: &PolicyStateFrame,
+        age_s: f64,
+    ) -> Result<StepOutput, RecoveryRuntimeError> {
+        let mut flags = 0_u32;
+        let policy_inference_ms;
+        let obs;
+        let action;
+        let packet;
+        if age_s > self.cfg.state_timeout_s {
+            self.reset_policy_memory(false, "state_timeout")?;
+            action = [0.0; 6];
+            flags |= ACTION_FLAG_TIMEOUT;
+            let (built_obs, obs_flags) = self.build_observation(state)?;
+            obs = built_obs;
+            flags |= obs_flags;
+            if obs_flags & ACTION_FLAG_NONFINITE != 0 {
+                self.stats.nonfinite_frames += 1;
+            }
+            policy_inference_ms = None;
+            packet = self.make_hold_target_packet(state)?;
+        } else if state.output_enabled == 0 {
+            self.reset_policy_memory(false, "output_disabled")?;
+            let (built_obs, obs_flags) = self.build_observation(state)?;
+            obs = built_obs;
+            action = [0.0; 6];
+            flags |= obs_flags | ACTION_FLAG_OUTPUT_DISABLED_HOLD;
+            if obs_flags & ACTION_FLAG_NONFINITE != 0 {
+                self.stats.nonfinite_frames += 1;
+            }
+            policy_inference_ms = None;
+            packet = self.make_hold_target_packet(state)?;
+        } else {
+            let result = self.act_from_state(state)?;
+            action = result.0;
+            flags = result.1;
+            obs = result.2;
+            policy_inference_ms = Some(result.3);
+            packet = self.make_target_packet(action)?;
+        }
+        Ok(StepOutput {
+            action,
+            flags,
+            obs,
+            policy_inference_ms,
+            packet,
+        })
+    }
+
     fn act_from_state(
         &mut self,
         state: &PolicyStateFrame,
-    ) -> Result<([f32; 6], u32, [f32; 32], f64), RecoveryRuntimeError> {
+    ) -> Result<([f32; 6], u32, Vec<f32>, f64), RecoveryRuntimeError> {
         let (obs, mut flags) = self.build_observation(state)?;
         let started = Instant::now();
         let action_vec = self.policy.act(&obs)?;
@@ -635,7 +790,7 @@ impl RecoveryRuntime {
     fn write_telemetry(
         &mut self,
         state: &PolicyStateFrame,
-        obs: &[f32; 32],
+        obs: &[f32],
         action: &[f32; 6],
         flags: u32,
         timing: TelemetryTiming,
@@ -888,6 +1043,14 @@ struct TelemetryTiming {
     write_ms: Option<f64>,
 }
 
+struct StepOutput {
+    action: [f32; 6],
+    flags: u32,
+    obs: Vec<f32>,
+    policy_inference_ms: Option<f64>,
+    packet: Vec<u8>,
+}
+
 pub enum LoadedPolicy {
     Ort(OrtPolicyRuntime),
 }
@@ -1087,6 +1250,41 @@ fn resolve_telemetry_log_path(path: PathBuf) -> Result<PathBuf, std::io::Error> 
     Ok(path.join(format!("recovery_telemetry_{}.jsonl", unix_time_s() as u64)))
 }
 
+fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if !meta.file_type().is_socket() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("refusing to unlink non-socket path: {}", path.display()),
+        ));
+    }
+    std::fs::remove_file(path)
+}
+
+struct SocketPathGuard {
+    path: PathBuf,
+}
+
+impl SocketPathGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn cleanup(&self) -> Result<(), std::io::Error> {
+        unlink_socket_path_if_present(&self.path)
+    }
+}
+
+impl Drop for SocketPathGuard {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+
 fn sha256_file(path: &Path) -> Result<Option<String>, std::io::Error> {
     if !path.is_file() {
         return Ok(None);
@@ -1109,7 +1307,13 @@ fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
     json!({
         "checkpoint": cfg.checkpoint,
         "ort_ep": cfg.ort_ep,
+        "transport": match cfg.transport {
+            RecoveryTransport::Cdc => "cdc",
+            RecoveryTransport::Sim => "sim",
+        },
         "port": cfg.port,
+        "sim_socket_path": cfg.sim_socket_path,
+        "sim_client_socket_path": cfg.sim_client_socket_path,
         "baudrate": cfg.baudrate,
         "device": cfg.device,
         "rate_hz": cfg.rate_hz,
@@ -1197,6 +1401,20 @@ mod tests {
             2.0e-5,
         );
         assert_close(&target.wheel_vel, &[27.000_002, -31.5], 2.0e-5);
+    }
+
+    #[test]
+    fn unlink_socket_path_refuses_regular_file() {
+        let path = std::env::temp_dir().join(format!(
+            "se3_regular_{}_{}",
+            std::process::id(),
+            unix_time_s()
+        ));
+        std::fs::write(&path, b"user data").unwrap();
+        let err = unlink_socket_path_if_present(&path).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(path.exists());
+        std::fs::remove_file(path).unwrap();
     }
 
     fn assert_close<const N: usize>(actual: &[f32; N], expected: &[f32; N], tol: f32) {

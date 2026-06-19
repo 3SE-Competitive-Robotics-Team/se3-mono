@@ -48,7 +48,14 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
 ```
 
-仿真循环通过根目录的 Python 启动脚本运行，命令为 `uv run se3-sim-loop --model <MJCF>`，根目录 `pyproject.toml` 管理依赖和脚本入口。
+仿真循环通过根目录的 Python 启动脚本运行，命令为 `uv run se3-sim-loop --model <MJCF>`，根目录 `pyproject.toml` 管理依赖和脚本入口。locomotion 可以通过本地 Unix datagram 和仿真循环闭环运行：
+
+```bash
+uv run se3-sim-loop --model <MJCF> --socket-path /tmp/se3_sim_loop.sock
+cargo run -p locomotion -- --transport sim --checkpoint <ONNX> --max-steps 100
+```
+
+默认仿真 socket 为 `/tmp/se3_sim_loop.sock`，locomotion 客户端 socket 为 `/tmp/se3_locomotion.sock`；可分别用 `--sim-socket-path` 和 `--sim-client-socket-path` 覆盖。
 
 ## prek 预提交
 

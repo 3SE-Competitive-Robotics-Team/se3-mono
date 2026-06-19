@@ -5,13 +5,24 @@ import socket
 import stat
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
+import mujoco.viewer
 import numpy as np
 
 from .mujoco_runtime import MujocoRuntime, MujocoRuntimeConfig
-from .protocol import PolicyTargetFrame, unpack_policy_target
+from .protocol import PolicyTargetFrame, pack_policy_state, unpack_policy_target
+from .rerun_viewer import RerunSimViewer, RerunSimViewerConfig
+
+
+class SimViewer(Protocol):
+    def is_running(self) -> bool: ...
+
+    def sync(self, *, step: int, ctrl: np.ndarray) -> None: ...
 
 
 @dataclass(slots=True)
@@ -23,6 +34,10 @@ class SimLoopConfig:
     leg_kp: float
     leg_kd: float
     wheel_kd: float
+    viewer: str
+    rerun_address: str | None
+    rerun_save: Path | None
+    rerun_memory_limit: str
 
 
 class SimLoopRuntime:
@@ -37,6 +52,8 @@ class SimLoopRuntime:
             )
         )
         self.latest_target = PolicyTargetFrame(0, (0.0, 0.0, 0.0, 0.0), (0.0, 0.0))
+        self.latest_target_time = time.monotonic()
+        self._peer_path: str | None = None
         self._lock = threading.Lock()
         self._running = False
 
@@ -49,32 +66,76 @@ class SimLoopRuntime:
         period = 1.0 / max(self.cfg.rate_hz, 1.0)
         next_tick = time.monotonic()
         steps = 0
+        viewer_ctx = self._viewer_context()
         try:
-            while self._running:
-                if self.cfg.max_steps > 0 and steps >= self.cfg.max_steps:
-                    break
-                with self._lock:
-                    target = self.latest_target
-                ctrl = self.mj.apply_target(
-                    np.asarray(target.joint_pos, dtype=np.float64),
-                    np.asarray(target.wheel_vel, dtype=np.float64),
-                )
-                self.mj.step()
-                if steps % 20 == 0:
-                    print(
-                        f"sim step={steps} seq={target.seq} ctrl={ctrl.tolist()} "
-                        f"qpos={self.mj.data.qpos[2]:.3f}"
+            with viewer_ctx as viewer:
+                while self._running and viewer.is_running():
+                    if self.cfg.max_steps > 0 and steps >= self.cfg.max_steps:
+                        break
+                    with self._lock:
+                        target = self.latest_target
+                        target_time = self.latest_target_time
+                        peer_path = self._peer_path
+                    ctrl = self.mj.apply_target(
+                        np.asarray(target.joint_pos, dtype=np.float64),
+                        np.asarray(target.wheel_vel, dtype=np.float64),
                     )
-                steps += 1
-                next_tick += period
-                now = time.monotonic()
-                if next_tick > now:
-                    time.sleep(next_tick - now)
-                else:
-                    next_tick = now
+                    self.mj.step()
+                    viewer.sync(step=steps, ctrl=ctrl)
+                    if peer_path is not None:
+                        state = self.mj.state_frame(
+                            seq=steps & 0xFFFFFFFF,
+                            tick_ms=int(self.mj.data.time * 1000.0) & 0xFFFFFFFF,
+                            target=target,
+                            target_age_ms=int(max(0.0, time.monotonic() - target_time) * 1000.0),
+                            target_valid=target.seq != 0,
+                            ctrl=ctrl,
+                        )
+                        try:
+                            self._socket.sendto(pack_policy_state(state), peer_path)
+                        except OSError as exc:
+                            print(f"drop state: {exc}")
+                            with self._lock:
+                                if self._peer_path == peer_path:
+                                    self._peer_path = None
+                    if steps % 20 == 0:
+                        print(
+                            f"sim step={steps} seq={target.seq} ctrl={ctrl.tolist()} "
+                            f"qpos={self.mj.data.qpos[2]:.3f}"
+                        )
+                    steps += 1
+                    next_tick += period
+                    now = time.monotonic()
+                    if next_tick > now:
+                        time.sleep(next_tick - now)
+                    else:
+                        next_tick = now
         finally:
             self._running = False
             self._cleanup_socket()
+            thread.join(timeout=1.0)
+
+    @contextmanager
+    def _viewer_context(self) -> Iterator[SimViewer]:
+        if self.cfg.viewer == "mujoco":
+            with mujoco.viewer.launch_passive(self.mj.model, self.mj.data) as viewer:
+                yield MujocoSimViewer(viewer)
+            return
+        if self.cfg.viewer == "rerun":
+            viewer = RerunSimViewer(
+                RerunSimViewerConfig(
+                    address=self.cfg.rerun_address,
+                    save_path=self.cfg.rerun_save,
+                    memory_limit=self.cfg.rerun_memory_limit,
+                )
+            )
+            viewer.log_model(self.mj.model)
+            try:
+                yield RerunRuntimeViewer(viewer, self.mj.model, self.mj.data)
+            finally:
+                viewer.close()
+            return
+        yield NullSimViewer()
 
     def _prepare_socket(self) -> None:
         if self.cfg.socket_path.exists():
@@ -93,7 +154,7 @@ class SimLoopRuntime:
     def _recv_loop(self) -> None:
         while self._running:
             try:
-                data, _ = self._socket.recvfrom(4096)
+                data, peer_path = self._socket.recvfrom(4096)
             except TimeoutError:
                 continue
             except OSError:
@@ -105,6 +166,9 @@ class SimLoopRuntime:
                 continue
             with self._lock:
                 self.latest_target = target
+                self.latest_target_time = time.monotonic()
+                if isinstance(peer_path, str) and peer_path:
+                    self._peer_path = peer_path
 
 
 def _unlink_socket_path(path: Path, *, require_socket: bool) -> None:
@@ -114,3 +178,35 @@ def _unlink_socket_path(path: Path, *, require_socket: bool) -> None:
             raise RuntimeError(f"refusing to unlink non-socket path: {path}")
         return
     os.unlink(path)
+
+
+class NullSimViewer:
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+        return
+
+
+class MujocoSimViewer:
+    def __init__(self, viewer: object) -> None:
+        self._viewer = viewer
+
+    def is_running(self) -> bool:
+        return bool(self._viewer.is_running())
+
+    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+        self._viewer.sync()
+
+
+class RerunRuntimeViewer:
+    def __init__(self, viewer: RerunSimViewer, model: object, data: object) -> None:
+        self._viewer = viewer
+        self._model = model
+        self._data = data
+
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+        self._viewer.log_state(self._model, self._data, step=step, ctrl=ctrl)

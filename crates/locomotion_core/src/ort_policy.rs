@@ -249,7 +249,7 @@ mod tests {
             return;
         };
         let mut policy = OrtPolicyRuntime::new(root, "cpu").unwrap();
-        let mut obs = [0.0_f32; 32];
+        let mut obs = vec![0.0_f32; policy.num_obs];
         obs[5] = -1.0;
         obs[10] = 1.1;
 

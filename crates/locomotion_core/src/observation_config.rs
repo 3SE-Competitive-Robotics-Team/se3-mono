@@ -17,7 +17,7 @@ impl Default for ObservationConfig {
             leg_vel_scale: 0.25,
             wheel_vel_scale: 0.05,
             clip_value: 100.0,
-            num_obs: 32,
+            num_obs: 34,
             num_actions: 6,
         }
     }

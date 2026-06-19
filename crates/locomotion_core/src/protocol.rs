@@ -555,6 +555,35 @@ mod tests {
     }
 
     #[test]
+    fn state_packet_round_trips_current_layout() {
+        let frame = PolicyStateFrame {
+            seq: 42,
+            tick_ms: 840,
+            target_seq: 41,
+            target_age_ms: 20,
+            target_valid: 1,
+            rc_switch_r: 1,
+            output_enabled: 1,
+            base_ang_vel_body: [0.125, 0.25, 0.5],
+            projected_gravity: [0.0, 0.0, -1.0],
+            joint_pos: [1.0, 2.0, 3.0, 4.0],
+            joint_vel: [5.0, 6.0, 7.0, 8.0],
+            wheel_pos: [9.0, 10.0],
+            wheel_vel: [11.0, 12.0],
+            target_joint_pos: [13.0, 14.0, 15.0, 16.0],
+            hip_torque: [17.0, 18.0, 19.0, 20.0],
+            wheel_torque: [21.0, 22.0],
+            wheel_motor_torque: [23.0, 24.0],
+        };
+        let packet = pack_policy_state(&frame).unwrap();
+        assert_eq!(packet.len(), HEADER_SIZE + POLICY_STATE_SIZE + CRC_SIZE);
+        let mut parser = StreamParser::default();
+        let messages = parser.feed(&packet);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(decode_policy_state(&messages[0]).unwrap(), frame);
+    }
+
+    #[test]
     fn stream_parser_handles_noise_and_split_frames() {
         let packet = pack_policy_target(&PolicyTargetFrame {
             seq: 7,

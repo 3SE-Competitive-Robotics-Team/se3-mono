@@ -10,6 +10,7 @@ pub struct RecoveryObservationBuilder {
     pub default_dof_pos: [f32; 6],
     pub command_scale: [f32; 5],
     pub command: [f32; 8],
+    pub num_obs: usize,
 }
 
 impl Default for RecoveryObservationBuilder {
@@ -35,7 +36,13 @@ impl RecoveryObservationBuilder {
                 0.0,
                 0.0,
             ],
+            num_obs: obs_cfg.num_obs,
         }
+    }
+
+    pub fn with_num_obs(mut self, num_obs: usize) -> Self {
+        self.num_obs = num_obs;
+        self
     }
 
     pub fn build(
@@ -56,10 +63,11 @@ impl RecoveryObservationBuilder {
             self.default_dof_pos,
             PolicyObservationConfig {
                 command_scale: Some(self.command_scale),
-                expected_num_obs: Some(obs_cfg.num_obs),
+                expected_num_obs: Some(self.num_obs),
                 clip_value: Some(obs_cfg.clip_value),
                 fourbar_surrogate: false,
                 normalize_projected_gravity: true,
+                phase_active_leg_observation: self.num_obs == obs_cfg.num_obs,
             },
         )
     }
@@ -101,8 +109,24 @@ mod tests {
         let result = builder.build(&state, [0.0; 6]).unwrap();
         assert!(!result.had_nonfinite_input);
         assert_eq!(
-            result.obs,
-            [
+            result.obs.as_slice(),
+            &[
+                0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.1, 0.0, 1.0, 0.0, 0.0, 1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0,
+            ]
+        );
+    }
+
+    #[test]
+    fn synthetic_observation_can_match_legacy_obs32_checkpoint() {
+        let builder = RecoveryObservationBuilder::new().with_num_obs(32);
+        let state = synthetic_recovery_state(7);
+        let result = builder.build(&state, [0.0; 6]).unwrap();
+        assert!(!result.had_nonfinite_input);
+        assert_eq!(
+            result.obs.as_slice(),
+            &[
                 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.1, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             ]
