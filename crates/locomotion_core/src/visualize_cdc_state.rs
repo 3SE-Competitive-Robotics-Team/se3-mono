@@ -7,6 +7,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use log::{info, warn};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
@@ -128,18 +129,14 @@ pub fn run_visualizer(cfg: VisualizerConfig) -> Result<(), VisualizerError> {
     } else {
         cfg.host.as_str()
     };
-    eprintln!(
+    info!(
         "CDC visualizer listening on http://{}:{}",
         url_host, cfg.viewer_port
     );
     if cfg.no_mjcf_render {
-        eprintln!(
-            "MJCF render disabled; Rust visualizer serves canvas fallback and JSON/SSE relay."
-        );
+        info!("MJCF render disabled; Rust visualizer serves canvas fallback and JSON/SSE relay.");
     } else {
-        eprintln!(
-            "MJCF render is not linked in this Rust build; /render_info reports enabled=false."
-        );
+        info!("MJCF render is not linked in this Rust build; /render_info reports enabled=false.");
     }
 
     while !stop.load(Ordering::SeqCst) {
@@ -148,7 +145,7 @@ pub fn run_visualizer(cfg: VisualizerConfig) -> Result<(), VisualizerError> {
                 let shared = shared.clone();
                 thread::spawn(move || {
                     if let Err(err) = handle_client(stream, shared) {
-                        eprintln!("visualizer client error: {err}");
+                        warn!("visualizer client error: {err}");
                     }
                 });
             }
@@ -206,20 +203,20 @@ fn spawn_cdc_reader(
             let mut serial = CdcSerial::new(&port, baudrate);
             match serial.open() {
                 Ok(()) => {
-                    eprintln!("CDC visualizer opened {port}");
+                    info!("CDC visualizer opened {port}");
                     while !stop.load(Ordering::SeqCst) {
                         match serial.wait_readable(read_timeout_s) {
                             Ok(true) => {}
                             Ok(false) => continue,
                             Err(err) => {
-                                eprintln!("CDC wait failed: {err}");
+                                warn!("CDC wait failed: {err}");
                                 break;
                             }
                         }
                         let data = match serial.read_available() {
                             Ok(data) => data,
                             Err(err) => {
-                                eprintln!("CDC read failed: {err}");
+                                warn!("CDC read failed: {err}");
                                 break;
                             }
                         };
@@ -243,7 +240,7 @@ fn spawn_cdc_reader(
                                             .expect("mutex poisoned")
                                             .update(snapshot, Some(state));
                                     }
-                                    Err(err) => eprintln!("state decode failed: {err}"),
+                                    Err(err) => warn!("state decode failed: {err}"),
                                 }
                             } else if message.msg_type == MSG_LATENCY {
                                 match decode_policy_latency(&message) {
@@ -251,7 +248,7 @@ fn spawn_cdc_reader(
                                         .lock()
                                         .expect("mutex poisoned")
                                         .update_latency(latency),
-                                    Err(err) => eprintln!("latency decode failed: {err}"),
+                                    Err(err) => warn!("latency decode failed: {err}"),
                                 }
                             }
                         }

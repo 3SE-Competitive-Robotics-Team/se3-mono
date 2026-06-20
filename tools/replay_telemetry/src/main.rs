@@ -32,6 +32,12 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let _logger_guard = se3_log::init(&se3_log::LoggerConfig::new(
+        "info,locomotion_core=debug,ort=warn",
+        "info,locomotion_core=debug,ort=info",
+        true,
+        true,
+    ))?;
     let exit_code = replay_telemetry(ReplayConfig {
         telemetry: args.telemetry,
         checkpoint: args.checkpoint,

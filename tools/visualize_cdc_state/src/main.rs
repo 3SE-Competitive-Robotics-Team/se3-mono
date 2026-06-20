@@ -40,6 +40,12 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let _logger_guard = se3_log::init(&se3_log::LoggerConfig::new(
+        "info,locomotion_core=debug",
+        "info,locomotion_core=debug",
+        true,
+        true,
+    ))?;
     run_visualizer(VisualizerConfig {
         port: args.port,
         baudrate: args.baudrate,

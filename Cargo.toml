@@ -7,6 +7,7 @@ members = [
     "crates/locomotion_core",
     "crates/se3_command",
     "crates/se3_input",
+    "crates/se3_log",
     "crates/se3_ort_ep",
     "crates/zoo",
     "tools/replay_telemetry",
@@ -48,6 +49,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 se3_command = { path = "crates/se3_command" }
 se3_input = { path = "crates/se3_input" }
+se3_log = { path = "crates/se3_log" }
 se3_ort_ep = { path = "crates/se3_ort_ep" }
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }

@@ -1,3 +1,4 @@
+use se3_log::LoggerConfig;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,7 @@ impl GameCfg {
         } else if self.enemy_fraction.trim() == "R" {
             Some(EnemyFaction::R)
         } else {
-            eprintln!("请检查 game_cfg/enemy_fraction 设置");
+            log::warn!("请检查 game_cfg/enemy_fraction 设置");
             None
         }
     }
@@ -37,14 +38,6 @@ impl GameCfg {
     pub fn is_blue(&self) -> bool {
         self.enemy_fraction.trim() == "blue"
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct LoggerCfg {
-    pub console_log_filter: String,
-    pub file_log_filter: String,
-    pub console_log_enable: bool,
-    pub file_log_enable: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -79,7 +72,7 @@ impl GeneralCfg {
             "HitSmallBuff" => TaskMode::HitSmallBuff,
             "HitOutpost" => TaskMode::HitOutpost,
             invalid => {
-                eprintln!(
+                log::warn!(
                     "请检查 general_cfg/offline_task_mode 设置，当前值 `{invalid}` 无效，回退到 AutoShot"
                 );
                 TaskMode::AutoShot
@@ -462,7 +455,7 @@ pub struct RbtCfg {
     pub general_cfg: GeneralCfg,
     pub detector_cfg: DetectorCfg,
     pub cam_cfg: CamCfg,
-    pub logger_cfg: LoggerCfg,
+    pub logger_cfg: LoggerConfig,
     pub estimator_cfg: EstimatorCfg,
     #[serde(default)]
     pub energy_mechanism_cfg: EnergyMechanismCfg,

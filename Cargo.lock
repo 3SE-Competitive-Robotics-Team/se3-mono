@@ -835,6 +835,7 @@ dependencies = [
  "ndarray 0.17.2",
  "ort",
  "rerun",
+ "se3_log",
  "se3_ort_ep",
  "tokio",
 ]
@@ -846,16 +847,13 @@ dependencies = [
  "crossbeam-queue",
  "half",
  "image",
- "jiff",
  "lazy_static",
  "log",
- "logforth",
- "logforth-append-async",
- "logforth-append-file",
  "nalgebra",
  "ndarray 0.17.2",
  "ort",
  "rerun",
+ "se3_log",
  "se3_ort_ep",
  "serde",
  "socketcan",
@@ -4968,8 +4966,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "locomotion_core",
+ "log",
  "se3_command",
  "se3_input",
+ "se3_log",
  "zoo",
 ]
 
@@ -4979,6 +4979,7 @@ version = "0.1.0"
 dependencies = [
  "ctrlc",
  "libc",
+ "log",
  "ndarray 0.17.2",
  "ort",
  "se3_command",
@@ -9575,6 +9576,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "locomotion_core",
+ "se3_log",
 ]
 
 [[package]]
@@ -9997,6 +9999,19 @@ name = "se3_input"
 version = "0.1.0"
 dependencies = [
  "gilrs",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "se3_log"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "log",
+ "logforth",
+ "logforth-append-async",
+ "logforth-append-file",
+ "serde",
  "thiserror 2.0.18",
 ]
 
@@ -11627,6 +11642,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "locomotion_core",
+ "se3_log",
 ]
 
 [[package]]

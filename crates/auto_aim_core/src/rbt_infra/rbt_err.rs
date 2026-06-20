@@ -32,12 +32,8 @@ pub enum RbtError {
     #[error("Tokio error: {0}")]
     TokioIoError(#[from] std::io::Error),
 
-    // 日志相关错误
-    #[error("Logforth error: {0}")]
-    LogforthError(#[from] logforth::Error),
-
-    #[error("Failed to initialize logger: {0}")]
-    LoggerInitError(String),
+    #[error("{0}")]
+    Log(#[from] se3_log::LogError),
 
     // 同步相关错误
     #[error("Failed to lock mutex: {0}")]

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use log::{info, warn};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -342,7 +343,7 @@ impl RecoveryRuntime {
     }
 
     pub fn run(&mut self) -> Result<RuntimeStats, RecoveryRuntimeError> {
-        eprintln!(
+        info!(
             "NX recovery runtime: checkpoint={} iter={} type={} device={}",
             self.cfg.checkpoint.display(),
             self.policy.iteration(),
@@ -569,7 +570,7 @@ impl RecoveryRuntime {
             let loop_result = (|| -> Result<(), RecoveryRuntimeError> {
                 let mut serial = CdcSerial::new(&port, self.cfg.baudrate);
                 serial.open()?;
-                eprintln!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
+                info!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
                 self.write_event(
                     "cdc_open",
                     json!({ "port": port, "reconnect_count": self.reconnect_count }),
@@ -656,7 +657,7 @@ impl RecoveryRuntime {
                             "error": error_text,
                         }),
                     )?;
-                    eprintln!(
+                    warn!(
                         "USB CDC disconnected: port={port}; reconnecting in {CDC_RECONNECT_DELAY_S:.1}s"
                     );
                     thread::sleep(Duration::from_secs_f64(CDC_RECONNECT_DELAY_S));
@@ -1133,7 +1134,7 @@ impl RecoveryRuntime {
             flag_names.join(",")
         };
         let target_mode = target_mode_name(self.stats.last_action_flags);
-        eprintln!(
+        info!(
             "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
             self.stats.steps,
             self.stats.state_frames,
@@ -1321,8 +1322,8 @@ impl TelemetryLogger {
             .create(true)
             .append(true)
             .open(&resolved)?;
-        eprintln!("telemetry log: {}", resolved.display());
-        eprintln!("telemetry meta: {}", meta_path.display());
+        info!("telemetry log: {}", resolved.display());
+        info!("telemetry meta: {}", meta_path.display());
         Ok(Self {
             path: Some(resolved),
             meta_path: Some(meta_path),
