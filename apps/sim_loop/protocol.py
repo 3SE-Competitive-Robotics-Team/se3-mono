@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from math import isfinite
 
 SOF = b"\xa5\x5a"
 VERSION = 1
@@ -59,6 +60,24 @@ def crc16(data: bytes) -> int:
     return crc & 0xFFFF
 
 
+def _ensure_finite(name: str, values: tuple[float, ...]) -> None:
+    if any(not isfinite(value) for value in values):
+        raise ValueError(f"{name} contains non-finite values")
+
+
+def _ensure_state_finite(frame: PolicyStateFrame) -> None:
+    _ensure_finite("base_ang_vel_body", frame.base_ang_vel_body)
+    _ensure_finite("projected_gravity", frame.projected_gravity)
+    _ensure_finite("joint_pos", frame.joint_pos)
+    _ensure_finite("joint_vel", frame.joint_vel)
+    _ensure_finite("wheel_pos", frame.wheel_pos)
+    _ensure_finite("wheel_vel", frame.wheel_vel)
+    _ensure_finite("target_joint_pos", frame.target_joint_pos)
+    _ensure_finite("hip_torque", frame.hip_torque)
+    _ensure_finite("wheel_torque", frame.wheel_torque)
+    _ensure_finite("wheel_motor_torque", frame.wheel_motor_torque)
+
+
 def _pack_message(msg_type: int, seq: int, payload: bytes) -> bytes:
     header = struct.pack("<2sBBHH", SOF, msg_type, VERSION, len(payload), seq & 0xFFFF)
     packet = header + payload
@@ -98,6 +117,8 @@ def _unpack_message(
 
 
 def pack_policy_target(frame: PolicyTargetFrame) -> bytes:
+    _ensure_finite("joint_pos", frame.joint_pos)
+    _ensure_finite("wheel_vel", frame.wheel_vel)
     payload = struct.pack("<I4f2f", frame.seq, *frame.joint_pos, *frame.wheel_vel)
     return _pack_message(MSG_TARGET, frame.seq, payload)
 
@@ -108,11 +129,14 @@ def unpack_policy_target(packet: bytes) -> PolicyTargetFrame:
         seq, *values = struct.unpack("<I4f2f", payload)
     except struct.error as exc:
         raise ValueError("invalid payload encoding") from exc
-    return PolicyTargetFrame(
+    frame = PolicyTargetFrame(
         seq=seq,
         joint_pos=(values[0], values[1], values[2], values[3]),
         wheel_vel=(values[4], values[5]),
     )
+    _ensure_finite("joint_pos", frame.joint_pos)
+    _ensure_finite("wheel_vel", frame.wheel_vel)
+    return frame
 
 
 def unpack_policy_command(packet: bytes) -> PolicyCommandFrame:
@@ -121,7 +145,7 @@ def unpack_policy_command(packet: bytes) -> PolicyCommandFrame:
         seq, *values = struct.unpack("<I8f", payload)
     except struct.error as exc:
         raise ValueError("invalid payload encoding") from exc
-    return PolicyCommandFrame(
+    frame = PolicyCommandFrame(
         seq=seq,
         command=(
             values[0],
@@ -134,9 +158,12 @@ def unpack_policy_command(packet: bytes) -> PolicyCommandFrame:
             values[7],
         ),
     )
+    _ensure_finite("command", frame.command)
+    return frame
 
 
 def pack_policy_state(frame: PolicyStateFrame) -> bytes:
+    _ensure_state_finite(frame)
     payload = struct.pack(
         "<IIIH6B3f3f4f4f2f2f4f4f2f2f",
         frame.tick_ms,
@@ -182,7 +209,7 @@ def unpack_policy_state(packet: bytes) -> PolicyStateFrame:
         _pad2,
         *floats,
     ) = values
-    return PolicyStateFrame(
+    frame = PolicyStateFrame(
         seq=seq,
         tick_ms=tick_ms,
         target_seq=target_seq,
@@ -201,3 +228,5 @@ def unpack_policy_state(packet: bytes) -> PolicyStateFrame:
         wheel_torque=(floats[26], floats[27]),
         wheel_motor_torque=(floats[28], floats[29]),
     )
+    _ensure_state_finite(frame)
+    return frame
