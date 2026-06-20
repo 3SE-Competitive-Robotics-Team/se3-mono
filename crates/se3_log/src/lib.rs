@@ -3,7 +3,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static LOGGER: OnceLock<Arc<Logger>> = OnceLock::new();
+const DEPLOY_LOG_ROOT: &str = "/var/opt/se3/logs";
+const LOG_DIR_ENV: &str = "SE3_LOG_DIR";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LoggerConfig {
@@ -54,7 +57,7 @@ impl Default for LoggerConfig {
 
 #[derive(Debug, Error)]
 pub enum LogError {
-    #[error("failed to create log directory `{path}`")]
+    #[error("failed to create log directory `{}`", .path.display())]
     CreateLogDirectory {
         path: PathBuf,
         #[source]
@@ -68,17 +71,15 @@ pub enum LogError {
 
 pub type LogResult<T> = Result<T, LogError>;
 
-pub struct LoggerGuard {
-    logger: Arc<Logger>,
-}
+pub struct LoggerGuard;
 
 impl Drop for LoggerGuard {
     fn drop(&mut self) {
-        self.logger.flush();
+        flush();
     }
 }
 
-pub fn workspace_root() -> PathBuf {
+fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -86,9 +87,25 @@ pub fn workspace_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
+fn local_log_root() -> PathBuf {
+    workspace_root().join("log")
+}
+
+fn log_root() -> PathBuf {
+    if let Some(path) = std::env::var_os(LOG_DIR_ENV) {
+        return PathBuf::from(path);
+    }
+
+    let deploy_root = PathBuf::from(DEPLOY_LOG_ROOT);
+    if deploy_root.exists() {
+        deploy_root
+    } else {
+        local_log_root()
+    }
+}
+
 fn daily_log_dir(now: &Zoned) -> PathBuf {
-    workspace_root()
-        .join("log")
+    log_root()
         .join(format!("{:04}", now.year()))
         .join(format!("{:02}", now.month()))
         .join(format!("{:02}", now.day()))
@@ -139,6 +156,7 @@ pub fn init(config: &LoggerConfig) -> LogResult<Option<LoggerGuard>> {
     let bridge = LogBridge::new(logger.clone());
     log::set_boxed_logger(Box::new(bridge))?;
     log::set_max_level(log::LevelFilter::Trace);
+    let _ = LOGGER.set(logger.clone());
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 
     info!(
@@ -154,7 +172,13 @@ pub fn init(config: &LoggerConfig) -> LogResult<Option<LoggerGuard>> {
         config.file_log_enable, config.console_log_enable
     );
 
-    Ok(Some(LoggerGuard { logger }))
+    Ok(Some(LoggerGuard))
+}
+
+pub fn flush() {
+    if let Some(logger) = LOGGER.get() {
+        logger.flush();
+    }
 }
 
 pub fn is_initialized() -> bool {
@@ -173,5 +197,10 @@ mod tests {
         assert_eq!(config.file_log_filter, "info");
         assert!(config.console_log_enable);
         assert!(config.file_log_enable);
+    }
+
+    #[test]
+    fn local_log_root_uses_workspace_log_dir() {
+        assert_eq!(local_log_root(), workspace_root().join("log"));
     }
 }

@@ -88,6 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(()) => Ok(()),
         Err(err) if se3_log::is_initialized() => {
             report_error(err.as_ref());
+            se3_log::flush();
             std::process::exit(1);
         }
         Err(err) => Err(err),
