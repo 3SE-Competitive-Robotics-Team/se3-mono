@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 libc.workspace = true
 ctrlc.workspace = true
+log.workspace = true
 ndarray.workspace = true
 ort.workspace = true
 se3_command.workspace = true

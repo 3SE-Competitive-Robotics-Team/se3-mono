@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+use log::{info, warn};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -232,7 +233,7 @@ fn replay_rows(
                 .last()
                 .copied()
                 .unwrap_or(f64::NAN);
-            eprintln!(
+            info!(
                 "replayed samples={} line={} policy={} hold={} last_action_err={:.3e}",
                 stats.sample_rows, line_no, stats.policy_rows, stats.hold_rows, last_error
             );
@@ -326,8 +327,8 @@ fn check_checkpoint_hash(checkpoint: &Path, meta: &Value) -> Result<(), ReplayEr
     };
     let actual = sha256_file(checkpoint)?;
     if actual != expected {
-        eprintln!(
-            "[warning] checkpoint sha256 mismatch: expected={expected} actual={actual} path={}",
+        warn!(
+            "checkpoint sha256 mismatch: expected={expected} actual={actual} path={}",
             checkpoint.display()
         );
     }
@@ -491,9 +492,9 @@ fn print_summary(telemetry: &Path, checkpoint: &Path, summary: &Value) {
     let action = &summary["action_max_abs_error"];
     let dt = &summary["dt_ms"];
     let policy_ms = &summary["policy_inference_ms"];
-    eprintln!("telemetry: {}", telemetry.display());
-    eprintln!("checkpoint: {}", checkpoint.display());
-    eprintln!(
+    info!("telemetry: {}", telemetry.display());
+    info!("checkpoint: {}", checkpoint.display());
+    info!(
         "rows: samples={} policy={} hold={} events={} resets={}",
         summary["sample_rows"],
         summary["policy_rows"],
@@ -501,13 +502,13 @@ fn print_summary(telemetry: &Path, checkpoint: &Path, summary: &Value) {
         summary["event_rows"],
         summary["reset_count"]
     );
-    eprintln!(
+    info!(
         "action max abs error: mean={:.3e} p95={:.3e} max={:.3e}",
         action["mean"].as_f64().unwrap_or(f64::NAN),
         action["p95"].as_f64().unwrap_or(f64::NAN),
         action["max"].as_f64().unwrap_or(f64::NAN)
     );
-    eprintln!(
+    info!(
         "dt ms: mean={:.3} p95={:.3} p99={:.3} max={:.3} missed={}",
         dt["mean"].as_f64().unwrap_or(f64::NAN),
         dt["p95"].as_f64().unwrap_or(f64::NAN),
@@ -515,7 +516,7 @@ fn print_summary(telemetry: &Path, checkpoint: &Path, summary: &Value) {
         dt["max"].as_f64().unwrap_or(f64::NAN),
         summary["missed_50hz_deadlines"]
     );
-    eprintln!(
+    info!(
         "logged policy ms: mean={:.3} p95={:.3} p99={:.3} max={:.3}",
         policy_ms["mean"].as_f64().unwrap_or(f64::NAN),
         policy_ms["p95"].as_f64().unwrap_or(f64::NAN),

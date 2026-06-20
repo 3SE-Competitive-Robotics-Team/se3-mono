@@ -6,6 +6,7 @@ use locomotion_core::recovery_runtime::{
     DEFAULT_CDC_PORT, RecoveryRuntime, RecoveryRuntimeConfig, RecoveryTransport,
     RuntimeCommandSample, RuntimeCommandSource, env_int, telemetry_log_path,
 };
+use log::{error, info, warn};
 use se3_command::{Command, CommandSourceKind};
 use se3_input::{GamepadInput, GamepadSelector, GamepadSnapshot, InputError};
 use zoo::RobotProfile;
@@ -82,27 +83,37 @@ struct Args {
     telemetry_flush_every: usize,
 }
 
-fn main() {
-    if let Err(err) = run_main() {
-        eprintln!("Error: {err}");
-        let mut source = err.source();
-        while let Some(err) = source {
-            eprintln!("  caused by: {err}");
-            source = err.source();
+fn main() -> Result<(), Box<dyn Error>> {
+    match run_main() {
+        Ok(()) => Ok(()),
+        Err(err) if se3_log::is_initialized() => {
+            report_error(err.as_ref());
+            se3_log::flush();
+            std::process::exit(1);
         }
-        std::process::exit(1);
+        Err(err) => Err(err),
+    }
+}
+
+fn report_error(err: &dyn Error) {
+    error!("Error: {err}");
+    let mut source = err.source();
+    while let Some(err) = source {
+        error!("  caused by: {err}");
+        source = err.source();
     }
 }
 
 fn run_main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let _logger_guard = se3_log::init(&locomotion_log_config())?;
     if args.list_gamepads {
         list_gamepads(&args.gamepad)?;
         return Ok(());
     }
     let robot = zoo::get_robot(&args.robot)?;
     let policy = resolve_policy(&robot, args.policy.as_deref())?;
-    eprintln!("selected robot={} policy={}", robot.id, policy.id);
+    info!("selected robot={} policy={}", robot.id, policy.id);
     let command_source_kind = args.command_source.unwrap_or(robot.command.default_source);
     let command_source = build_command_source(&robot, command_source_kind, &args.gamepad)?;
 
@@ -196,10 +207,10 @@ fn list_gamepads(selector: &str) -> Result<(), Box<dyn Error>> {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     if gamepads.is_empty() {
-        eprintln!("no connected gamepads");
+        info!("no connected gamepads");
     } else {
         for (id, name) in gamepads {
-            eprintln!("gamepad {id}: {name}");
+            info!("gamepad {id}: {name}");
         }
     }
     Ok(())
@@ -234,7 +245,7 @@ impl RuntimeCommandSource for GamepadCommandSource {
             Ok(snapshot) => self.sample_from_snapshot(&snapshot),
             Err(InputError::NoConnectedGamepad) => RuntimeCommandSample::xinput_idle(self.fallback),
             Err(err) => {
-                eprintln!("xinput sample failed: {err}");
+                warn!("xinput sample failed: {err}");
                 RuntimeCommandSample::xinput_idle(self.fallback)
             }
         }
@@ -309,4 +320,13 @@ fn default_telemetry_log_every() -> usize {
 
 fn default_telemetry_flush_every() -> usize {
     env_int("SE3_TELEMETRY_FLUSH_EVERY", 25)
+}
+
+fn locomotion_log_config() -> se3_log::LoggerConfig {
+    se3_log::LoggerConfig::new(
+        "info,locomotion=debug,locomotion_core=debug,ort=warn",
+        "info,locomotion=debug,locomotion_core=debug,ort=info",
+        true,
+        true,
+    )
 }

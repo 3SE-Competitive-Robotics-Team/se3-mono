@@ -14,5 +14,6 @@ log.workspace = true
 ndarray.workspace = true
 ort.workspace = true
 rerun.workspace = true
+se3_log.workspace = true
 se3_ort_ep.workspace = true
 tokio.workspace = true

@@ -8,7 +8,9 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+log.workspace = true
 locomotion_core.workspace = true
 se3_command.workspace = true
 se3_input.workspace = true
+se3_log.workspace = true
 zoo.workspace = true

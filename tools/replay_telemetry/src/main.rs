@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::Parser;
 use locomotion_core::replay_telemetry::{ReplayConfig, replay_telemetry};
@@ -30,8 +31,14 @@ struct Args {
     fail_action_error: Option<f64>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let _logger_guard = se3_log::init(&se3_log::LoggerConfig::new(
+        "info,locomotion_core=debug,ort=warn",
+        "info,locomotion_core=debug,ort=info",
+        true,
+        true,
+    ))?;
     let exit_code = replay_telemetry(ReplayConfig {
         telemetry: args.telemetry,
         checkpoint: args.checkpoint,
@@ -42,5 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report_json: args.report_json,
         fail_action_error: args.fail_action_error,
     })?;
-    std::process::exit(exit_code);
+    drop(_logger_guard);
+    Ok(ExitCode::from(exit_code as u8))
 }

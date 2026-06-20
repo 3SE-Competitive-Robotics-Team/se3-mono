@@ -10,7 +10,6 @@ use crate::rbt_threads::{
 };
 use auto_aim_core::rbt_infra::rbt_err::{RbtError, RbtResult};
 use auto_aim_core::rbt_infra::rbt_global::GENERIC_RBT_CFG;
-use auto_aim_core::rbt_infra::rbt_log;
 use auto_aim_core::rbt_infra::rbt_queue_async::RbtSPSCQueueAsync;
 use auto_aim_core::rbt_mod::rbt_comm::rbt_comm_frame::{CtrlData, SensData};
 use auto_aim_core::rbt_mod::rbt_detector::rbt_frame::RbtFrame;
@@ -57,8 +56,8 @@ fn rerun_recording_stream() -> RbtResult<rr::RecordingStream> {
 
 #[tokio::main]
 async fn main() -> RbtResult<()> {
-    // init logger
-    let _logger_guard = rbt_log::logger_init()?;
+    let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
+    let _logger_guard = se3_log::init(&cfg.logger_cfg)?;
     // init rerun logger
     let rec = rerun_recording_stream()?;
 
@@ -87,7 +86,6 @@ async fn main() -> RbtResult<()> {
     let runtime_queues = RuntimePipelineQueues::new(armor_queues, energy_mechanism_queues);
     let runtime_router = RuntimeRouter::default();
     let runtime_completion = RuntimePipelineCompletion::new();
-    let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
 
     let model_path = cfg.detector_cfg.armor.model_path.as_path();
     ensure_required_file(model_path, "armor model file")?;
