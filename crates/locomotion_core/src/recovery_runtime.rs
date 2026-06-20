@@ -31,6 +31,7 @@ pub const ACTION_FLAG_DRY_RUN: u32 = 1 << 0;
 pub const ACTION_FLAG_TIMEOUT: u32 = 1 << 1;
 pub const ACTION_FLAG_NONFINITE: u32 = 1 << 2;
 pub const ACTION_FLAG_OUTPUT_DISABLED_HOLD: u32 = 1 << 3;
+pub const ACTION_FLAG_COMMAND_INACTIVE: u32 = 1 << 4;
 
 #[derive(Debug, Error)]
 pub enum RecoveryRuntimeError {
@@ -371,17 +372,33 @@ impl RecoveryRuntime {
             let state = synthetic_recovery_state(step as u32);
             self.stats.state_frames += 1;
             self.sample_command();
-            let (action, mut flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
-            flags |= ACTION_FLAG_DRY_RUN;
-            self.decode_target(action)?;
-            self.record_action(&state, action, flags, Some(policy_inference_ms));
+            let (action, flags, obs, policy_inference_ms) = if self.last_command_sample.active {
+                let (action, flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
+                self.decode_target(action)?;
+                (
+                    action,
+                    flags | ACTION_FLAG_DRY_RUN,
+                    obs,
+                    Some(policy_inference_ms),
+                )
+            } else {
+                self.reset_policy_memory(false, "command_inactive")?;
+                let (obs, obs_flags) = self.build_observation(&state)?;
+                (
+                    [0.0; 6],
+                    obs_flags | ACTION_FLAG_DRY_RUN | ACTION_FLAG_COMMAND_INACTIVE,
+                    obs,
+                    None,
+                )
+            };
+            self.record_action(&state, action, flags, policy_inference_ms);
             self.write_telemetry(
                 &state,
                 &obs,
                 &action,
                 flags,
                 TelemetryTiming {
-                    policy_inference_ms: Some(policy_inference_ms),
+                    policy_inference_ms,
                     state_age_s: Some(0.0),
                     loop_started,
                     write_ms: None,
@@ -465,8 +482,12 @@ impl RecoveryRuntime {
                     command_packet,
                 } = self.step_from_state(state, age_s)?;
                 let write_started = Instant::now();
-                socket.send(&command_packet)?;
-                socket.send(&packet)?;
+                if let Some(command_packet) = command_packet {
+                    socket.send(&command_packet)?;
+                }
+                if let Some(packet) = packet {
+                    socket.send(&packet)?;
+                }
                 let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                 self.record_action(state, action, flags, policy_inference_ms);
                 self.write_telemetry(
@@ -597,7 +618,9 @@ impl RecoveryRuntime {
                         command_packet: _,
                     } = self.step_from_state(state, age_s)?;
                     let write_started = Instant::now();
-                    serial.write_all(&packet, self.cfg.write_timeout_s)?;
+                    if let Some(packet) = packet {
+                        serial.write_all(&packet, self.cfg.write_timeout_s)?;
+                    }
                     let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                     self.record_action(state, action, flags, policy_inference_ms);
                     self.write_telemetry(
@@ -692,8 +715,21 @@ impl RecoveryRuntime {
         let obs;
         let action;
         let packet;
+        let command_packet;
         self.sample_command();
-        if age_s > self.cfg.state_timeout_s {
+        if !self.last_command_sample.active {
+            self.reset_policy_memory(false, "command_inactive")?;
+            let (built_obs, obs_flags) = self.build_observation(state)?;
+            obs = built_obs;
+            action = [0.0; 6];
+            flags |= obs_flags | ACTION_FLAG_COMMAND_INACTIVE;
+            if obs_flags & ACTION_FLAG_NONFINITE != 0 {
+                self.stats.nonfinite_frames += 1;
+            }
+            policy_inference_ms = None;
+            packet = None;
+            command_packet = None;
+        } else if age_s > self.cfg.state_timeout_s {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
             flags |= ACTION_FLAG_TIMEOUT;
@@ -704,7 +740,8 @@ impl RecoveryRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = self.make_hold_target_packet(state)?;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else if state.output_enabled == 0 {
             self.reset_policy_memory(false, "output_disabled")?;
             let (built_obs, obs_flags) = self.build_observation(state)?;
@@ -715,14 +752,16 @@ impl RecoveryRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = self.make_hold_target_packet(state)?;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else {
             let result = self.act_from_state(state)?;
             action = result.0;
             flags = result.1;
             obs = result.2;
             policy_inference_ms = Some(result.3);
-            packet = self.make_target_packet(action)?;
+            packet = Some(self.make_target_packet(action)?);
+            command_packet = Some(self.make_command_packet()?);
         }
         Ok(StepOutput {
             action,
@@ -730,7 +769,7 @@ impl RecoveryRuntime {
             obs,
             policy_inference_ms,
             packet,
-            command_packet: self.make_command_packet()?,
+            command_packet,
         })
     }
 
@@ -960,16 +999,7 @@ impl RecoveryRuntime {
             "policy_inference_frames".to_string(),
             json!(self.stats.policy_inference_frames),
         );
-        record.insert(
-            "target_mode".to_string(),
-            json!(
-                if flags & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT) != 0 {
-                    "hold_current"
-                } else {
-                    "policy"
-                }
-            ),
-        );
+        record.insert("target_mode".to_string(), json!(target_mode_name(flags)));
         record.insert(
             "last_policy_reset_reason".to_string(),
             json!(self.last_policy_reset_reason),
@@ -1102,14 +1132,7 @@ impl RecoveryRuntime {
         } else {
             flag_names.join(",")
         };
-        let target_mode = if self.stats.last_action_flags
-            & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT)
-            != 0
-        {
-            "hold_current"
-        } else {
-            "policy"
-        };
+        let target_mode = target_mode_name(self.stats.last_action_flags);
         eprintln!(
             "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
             self.stats.steps,
@@ -1167,8 +1190,8 @@ struct StepOutput {
     flags: u32,
     obs: Vec<f32>,
     policy_inference_ms: Option<f64>,
-    packet: Vec<u8>,
-    command_packet: Vec<u8>,
+    packet: Option<Vec<u8>>,
+    command_packet: Option<Vec<u8>>,
 }
 
 pub enum LoadedPolicy {
@@ -1522,7 +1545,20 @@ fn action_flag_names(flags: u32) -> Vec<&'static str> {
     if flags & ACTION_FLAG_OUTPUT_DISABLED_HOLD != 0 {
         names.push("output_disabled_hold");
     }
+    if flags & ACTION_FLAG_COMMAND_INACTIVE != 0 {
+        names.push("command_inactive");
+    }
     names
+}
+
+fn target_mode_name(flags: u32) -> &'static str {
+    if flags & ACTION_FLAG_COMMAND_INACTIVE != 0 {
+        "command_inactive"
+    } else if flags & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT) != 0 {
+        "hold_current"
+    } else {
+        "policy"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

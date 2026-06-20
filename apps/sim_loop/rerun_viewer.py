@@ -34,6 +34,16 @@ _COMMAND_NAMES = (
     "jump_target_height_m",
     "jump_phase",
 )
+_COMMAND_COLORS = (
+    (39, 119, 217, 255),
+    (235, 145, 55, 255),
+    (44, 174, 191, 255),
+    (216, 91, 80, 255),
+    (84, 118, 172, 255),
+    (139, 103, 209, 255),
+    (34, 153, 112, 255),
+    (180, 185, 195, 255),
+)
 _CTRL_NAMES = (
     "left_front_hip_torque",
     "left_back_hip_torque",
@@ -43,12 +53,16 @@ _CTRL_NAMES = (
     "right_wheel_torque",
 )
 _WHEEL_RADIUS_M = 0.06
+_DEFAULT_GEOM_RGBA = np.asarray((0.5, 0.5, 0.5, 1.0), dtype=np.float32)
 
 _GEOM_COLORS = {
-    "base": (72, 115, 180, 255),
-    "left": (35, 156, 93, 255),
-    "right": (242, 145, 51, 255),
-    "wheel": (38, 132, 255, 255),
+    "base": (84, 118, 172, 255),
+    "left_thigh": (34, 153, 112, 255),
+    "left_calf": (44, 174, 191, 255),
+    "left_wheel": (39, 119, 217, 255),
+    "right_thigh": (235, 145, 55, 255),
+    "right_calf": (216, 91, 80, 255),
+    "right_wheel": (139, 103, 209, 255),
     "default": (180, 185, 195, 255),
 }
 
@@ -88,6 +102,7 @@ class RerunSimViewer:
             disconnect()
 
     def log_model(self, model: mujoco.MjModel) -> None:
+        _log_timeseries_styles()
         self.body_paths = [_body_path(model, body_id) for body_id in range(model.nbody)]
         for geom_id in range(model.ngeom):
             if not _should_log_visual_geom(model, geom_id):
@@ -139,7 +154,10 @@ def _blueprint() -> rrb.Blueprint:
             rrb.Spatial3DView(origin="/world", name="MuJoCo"),
             rrb.Vertical(
                 rrb.TimeSeriesView(origin="/metrics/base_height", name="Base height"),
-                rrb.TimeSeriesView(origin="/metrics/command", name="Command"),
+                rrb.TimeSeriesView(
+                    origin="/metrics/command",
+                    name="Semantic command",
+                ),
                 rrb.TimeSeriesView(origin="/metrics/action/joint_pos", name="Action joint target"),
                 rrb.TimeSeriesView(origin="/metrics/action/wheel_vel_mps", name="Action wheel m/s"),
                 rrb.TimeSeriesView(
@@ -158,6 +176,15 @@ def _blueprint() -> rrb.Blueprint:
         auto_layout=False,
         auto_views=False,
     )
+
+
+def _log_timeseries_styles() -> None:
+    for name, color in zip(_COMMAND_NAMES, _COMMAND_COLORS, strict=True):
+        rr.log(
+            f"/metrics/command/{name}",
+            rr.SeriesLines(colors=[color], names=[name]),
+            static=True,
+        )
 
 
 def _log_geom(model: mujoco.MjModel, geom_id: int, path: str, *, body_frame: str) -> None:
@@ -229,18 +256,42 @@ def _name(model: mujoco.MjModel, obj_type: mujoco.mjtObj, obj_id: int) -> str:
 
 def _geom_color(model: mujoco.MjModel, geom_id: int) -> tuple[int, int, int, int]:
     rgba = np.asarray(model.geom_rgba[geom_id], dtype=np.float32)
-    if np.any(rgba > 0.0):
+    if _has_custom_rgba(rgba):
         return tuple(int(v) for v in np.clip(rgba * 255.0, 0, 255))
-    name = _name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id).lower()
-    if "wheel" in name:
-        return _GEOM_COLORS["wheel"]
-    if name.startswith("l") or "left" in name:
-        return _GEOM_COLORS["left"]
-    if name.startswith("r") or "right" in name:
-        return _GEOM_COLORS["right"]
+    return _semantic_geom_color(_geom_descriptor(model, geom_id))
+
+
+def _has_custom_rgba(rgba: np.ndarray) -> bool:
+    return bool(np.any(rgba > 0.0) and not np.allclose(rgba, _DEFAULT_GEOM_RGBA))
+
+
+def _geom_descriptor(model: mujoco.MjModel, geom_id: int) -> str:
+    parts = [_name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)]
+    mesh_id = int(model.geom_dataid[geom_id])
+    if mesh_id >= 0:
+        parts.append(_name(model, mujoco.mjtObj.mjOBJ_MESH, mesh_id))
+    return " ".join(parts).lower()
+
+
+def _semantic_geom_color(name: str) -> tuple[int, int, int, int]:
+    side = _geom_side(name)
+    if "wheel" in name and side is not None:
+        return _GEOM_COLORS[f"{side}_wheel"]
+    if "thigh" in name and side is not None:
+        return _GEOM_COLORS[f"{side}_thigh"]
+    if "calf" in name and side is not None:
+        return _GEOM_COLORS[f"{side}_calf"]
     if "base" in name:
         return _GEOM_COLORS["base"]
     return _GEOM_COLORS["default"]
+
+
+def _geom_side(name: str) -> str | None:
+    if any(token in name for token in ("left", "lf_", "lf0", "lf1", "l_wheel", "visual_lf", "visual_l_")):
+        return "left"
+    if any(token in name for token in ("right", "rf_", "rf0", "rf1", "r_wheel", "visual_rf", "visual_r_")):
+        return "right"
+    return None
 
 
 def _quat_wxyz_to_xyzw(quat: np.ndarray) -> np.ndarray:

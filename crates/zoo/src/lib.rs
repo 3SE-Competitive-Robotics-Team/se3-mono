@@ -72,12 +72,50 @@ impl CommandProfile {
 pub struct GamepadCommandProfile {
     pub deadzone: f32,
     pub limits: ChassisCommandLimits,
-    pub map: fn(&GamepadSnapshot, &GamepadCommandProfile) -> Command,
+    pub height_step_m: f32,
+    pub roll_rad: f32,
+    pub map: fn(&GamepadSnapshot, &GamepadCommandProfile, &mut GamepadCommandState) -> Command,
+}
+
+#[derive(Debug, Clone)]
+pub struct GamepadCommandState {
+    height_m: f32,
+    previous_dpad_y: i8,
+    controls_enabled: bool,
+    previous_down_toggle: bool,
+}
+
+impl GamepadCommandState {
+    pub fn new(height_m: f32, limits: ChassisCommandLimits) -> Self {
+        Self {
+            height_m: height_m.clamp(limits.min_height_m, limits.max_height_m),
+            previous_dpad_y: 0,
+            controls_enabled: true,
+            previous_down_toggle: false,
+        }
+    }
+
+    pub fn controls_enabled(&self) -> bool {
+        self.controls_enabled
+    }
 }
 
 impl GamepadCommandProfile {
+    pub fn initial_state(&self, height_m: f32) -> GamepadCommandState {
+        GamepadCommandState::new(height_m, self.limits)
+    }
+
     pub fn command(&self, snapshot: &GamepadSnapshot) -> Command {
-        (self.map)(snapshot, self)
+        let default_height = RobotConfig::default().default_base_height as f32;
+        self.command_with_state(snapshot, &mut self.initial_state(default_height))
+    }
+
+    pub fn command_with_state(
+        &self,
+        snapshot: &GamepadSnapshot,
+        state: &mut GamepadCommandState,
+    ) -> Command {
+        (self.map)(snapshot, self, state)
     }
 }
 
@@ -167,14 +205,16 @@ pub fn serial_leg_dev() -> RobotProfile {
             gamepad: Some(GamepadCommandProfile {
                 deadzone: 0.12,
                 limits: ChassisCommandLimits {
-                    max_vx_mps: 1.5,
+                    max_vx_mps: 1.2,
                     max_yaw_rate_rad_s: 1.5,
                     max_pitch_rad: 0.0,
-                    max_roll_rad: 0.0,
+                    max_roll_rad: 0.10,
                     min_height_m: 0.16,
                     max_height_m: 0.28,
                     max_jump_target_height_m: 0.35,
                 },
+                height_step_m: 0.02,
+                roll_rad: 0.10,
                 map: serial_leg_gamepad_command,
             }),
         },
@@ -206,20 +246,34 @@ pub fn serial_leg_dev() -> RobotProfile {
 fn serial_leg_gamepad_command(
     snapshot: &GamepadSnapshot,
     profile: &GamepadCommandProfile,
+    state: &mut GamepadCommandState,
 ) -> Command {
-    let default_height = RobotConfig::default().default_base_height as f32;
-    let idle = ChassisCommand::idle(default_height);
+    if snapshot.east && !state.previous_down_toggle {
+        state.controls_enabled = !state.controls_enabled;
+    }
+    state.previous_down_toggle = snapshot.east;
+
+    if !state.controls_enabled {
+        state.previous_dpad_y = dpad_direction(snapshot.dpad_y);
+        return Command::chassis(ChassisCommand::idle(state.height_m));
+    }
+
+    let idle = ChassisCommand::idle(
+        state
+            .height_m
+            .clamp(profile.limits.min_height_m, profile.limits.max_height_m),
+    );
 
     let vx = apply_deadzone(snapshot.left_stick_y, profile.deadzone) * profile.limits.max_vx_mps;
     let yaw_rate = -apply_deadzone(snapshot.right_stick_x, profile.deadzone)
         * profile.limits.max_yaw_rate_rad_s;
-    let height_delta = if snapshot.dpad_y.abs() > 0.5 {
-        snapshot.dpad_y.signum() * 0.02
-    } else {
-        0.0
-    };
-    let height_m = (default_height + height_delta)
-        .clamp(profile.limits.min_height_m, profile.limits.max_height_m);
+    let dpad_y = dpad_direction(snapshot.dpad_y);
+    if dpad_y != 0 && dpad_y != state.previous_dpad_y {
+        state.height_m = (state.height_m + f32::from(dpad_y) * profile.height_step_m)
+            .clamp(profile.limits.min_height_m, profile.limits.max_height_m);
+    }
+    state.previous_dpad_y = dpad_y;
+    let roll_rad = f32::from(dpad_direction(snapshot.dpad_x)) * profile.roll_rad;
     let jump = JumpCommand {
         enabled: snapshot.south,
         target_height_m: if snapshot.south {
@@ -233,8 +287,8 @@ fn serial_leg_gamepad_command(
         vx_mps: vx,
         yaw_rate_rad_s: yaw_rate,
         pitch_rad: 0.0,
-        roll_rad: 0.0,
-        height_m,
+        roll_rad,
+        height_m: state.height_m,
         jump,
     }
     .validate(profile.limits)
@@ -243,6 +297,14 @@ fn serial_leg_gamepad_command(
     Command {
         chassis: Some(chassis),
         gimbal: None::<GimbalCommand>,
+    }
+}
+
+fn dpad_direction(value: f32) -> i8 {
+    if value.abs() > 0.5 {
+        value.signum() as i8
+    } else {
+        0
     }
 }
 

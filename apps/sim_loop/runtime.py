@@ -26,6 +26,8 @@ from .protocol import (
 )
 from .rerun_viewer import RerunSimViewer, RerunSimViewerConfig
 
+TARGET_TIMEOUT_S = 0.10
+
 
 class SimViewer(Protocol):
     def is_running(self) -> bool: ...
@@ -93,10 +95,15 @@ class SimLoopRuntime:
                         target = self.latest_target
                         target_time = self.latest_target_time
                         peer_path = self._peer_path
-                    ctrl = self.mj.apply_target(
-                        np.asarray(target.joint_pos, dtype=np.float64),
-                        np.asarray(target.wheel_vel, dtype=np.float64),
-                    )
+                    target_age_s = max(0.0, time.monotonic() - target_time)
+                    target_valid = target.seq != 0 and target_age_s <= TARGET_TIMEOUT_S
+                    if target_valid:
+                        ctrl = self.mj.apply_target(
+                            np.asarray(target.joint_pos, dtype=np.float64),
+                            np.asarray(target.wheel_vel, dtype=np.float64),
+                        )
+                    else:
+                        ctrl = self.mj.disable_actuators()
                     self.mj.step()
                     viewer.sync(step=steps, command=command, target=target, ctrl=ctrl)
                     if peer_path is not None:
@@ -104,8 +111,8 @@ class SimLoopRuntime:
                             seq=steps & 0xFFFFFFFF,
                             tick_ms=int(self.mj.data.time * 1000.0) & 0xFFFFFFFF,
                             target=target,
-                            target_age_ms=int(max(0.0, time.monotonic() - target_time) * 1000.0),
-                            target_valid=target.seq != 0,
+                            target_age_ms=int(target_age_s * 1000.0),
+                            target_valid=target_valid,
                             ctrl=ctrl,
                         )
                         try:

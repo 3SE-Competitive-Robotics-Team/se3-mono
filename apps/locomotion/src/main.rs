@@ -167,9 +167,17 @@ fn build_command_source(
             })?;
             let selector = GamepadSelector::parse(gamepad_selector)?;
             let input = GamepadInput::new(selector)?;
+            let initial_height = robot
+                .command
+                .fixed
+                .chassis
+                .map(|command| command.height_m)
+                .unwrap_or(robot.locomotion.robot_cfg.default_base_height as f32);
+            let state = profile.initial_state(initial_height);
             Ok(Box::new(GamepadCommandSource {
                 input,
                 profile,
+                state,
                 fallback: robot.command.fixed,
             }))
         }
@@ -216,6 +224,7 @@ impl RuntimeCommandSource for FixedCommandSource {
 struct GamepadCommandSource {
     input: GamepadInput,
     profile: zoo::GamepadCommandProfile,
+    state: zoo::GamepadCommandState,
     fallback: Command,
 }
 
@@ -233,11 +242,12 @@ impl RuntimeCommandSource for GamepadCommandSource {
 }
 
 impl GamepadCommandSource {
-    fn sample_from_snapshot(&self, snapshot: &GamepadSnapshot) -> RuntimeCommandSample {
+    fn sample_from_snapshot(&mut self, snapshot: &GamepadSnapshot) -> RuntimeCommandSample {
+        let command = self.profile.command_with_state(snapshot, &mut self.state);
         RuntimeCommandSample {
-            command: self.profile.command(snapshot),
+            command,
             source: CommandSourceKind::XInput,
-            active: snapshot.connected,
+            active: snapshot.connected && self.state.controls_enabled(),
             device_id: Some(snapshot.id),
             device_name: Some(snapshot.name.clone()),
         }
