@@ -2,8 +2,8 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use clap::Parser;
-use locomotion_core::recovery_runtime::{
-    DEFAULT_CDC_PORT, RecoveryRuntime, RecoveryRuntimeConfig, RecoveryTransport,
+use locomotion_core::policy_runtime::{
+    DEFAULT_CDC_PORT, LocomotionPolicyConfig, LocomotionPolicyRuntime, LocomotionTransport,
     RuntimeCommandSample, RuntimeCommandSource, env_int, telemetry_log_path,
 };
 use log::{error, info, warn};
@@ -14,7 +14,7 @@ use zoo::RobotProfile;
 const DEFAULT_ROBOT_ID: &str = "serial_leg_dev";
 
 #[derive(Debug, Parser)]
-#[command(about = "Run SerialLeg recovery-only policy runtime on Jetson Orin NX.")]
+#[command(about = "Run SerialLeg locomotion policy runtime on Jetson Orin NX.")]
 struct Args {
     #[arg(long, default_value = DEFAULT_ROBOT_ID)]
     robot: String,
@@ -38,7 +38,7 @@ struct Args {
     list_gamepads: bool,
 
     #[arg(long, value_parser = parse_transport, default_value = "cdc")]
-    transport: RecoveryTransport,
+    transport: LocomotionTransport,
 
     #[arg(long, default_value_t = default_port())]
     port: String,
@@ -121,7 +121,7 @@ fn run_main() -> Result<(), Box<dyn Error>> {
         .checkpoint
         .or_else(|| std::env::var_os("SE3_RECOVERY_CHECKPOINT").map(PathBuf::from))
         .or_else(|| policy.checkpoint.clone());
-    let cfg = RecoveryRuntimeConfig {
+    let cfg = LocomotionPolicyConfig {
         checkpoint: checkpoint.ok_or_else(missing_checkpoint_error)?,
         ort_ep: args.ort_ep.unwrap_or_else(|| policy.ort_ep.clone()),
         command_source: command_source_kind,
@@ -154,7 +154,7 @@ fn run_main() -> Result<(), Box<dyn Error>> {
         telemetry_log_every: args.telemetry_log_every,
         telemetry_flush_every: args.telemetry_flush_every,
     };
-    let mut runtime = RecoveryRuntime::new_with_command_source(cfg, command_source)?;
+    let mut runtime = LocomotionPolicyRuntime::new_with_command_source(cfg, command_source)?;
     runtime.run()?;
     Ok(())
 }
@@ -302,10 +302,10 @@ fn default_port() -> String {
     std::env::var("SE3_CDC_PORT").unwrap_or_else(|_| DEFAULT_CDC_PORT.to_string())
 }
 
-fn parse_transport(value: &str) -> Result<RecoveryTransport, String> {
+fn parse_transport(value: &str) -> Result<LocomotionTransport, String> {
     match value {
-        "cdc" => Ok(RecoveryTransport::Cdc),
-        "sim" => Ok(RecoveryTransport::Sim),
+        "cdc" => Ok(LocomotionTransport::Cdc),
+        "sim" => Ok(LocomotionTransport::Sim),
         _ => Err(format!("unsupported transport: {value}")),
     }
 }

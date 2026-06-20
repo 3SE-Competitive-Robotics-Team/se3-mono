@@ -19,15 +19,15 @@ use se3_command::{Command, CommandSourceKind};
 use crate::cdc::{CdcError, CdcSerial, cdc_port_disappeared, resolve_cdc_port};
 use crate::command::LocomotionCommand;
 use crate::ort_policy::{OrtPolicyError, OrtPolicyRuntime};
+use crate::policy_observation::{LocomotionObservationBuilder, synthetic_default_state};
 use crate::protocol::{
     MSG_POLICY_STATE, PolicyCommandFrame, PolicyStateFrame, PolicyTargetFrame, ProtocolError,
     StreamParser, decode_policy_state, pack_policy_command, pack_policy_target,
 };
-use crate::recovery_observation::{RecoveryObservationBuilder, synthetic_recovery_state};
 
 pub const DEFAULT_CDC_PORT: &str = "auto";
 pub const CDC_RECONNECT_DELAY_S: f64 = 1.0;
-pub const TELEMETRY_SCHEMA: &str = "se3_nx_recovery_telemetry_v2";
+pub const TELEMETRY_SCHEMA: &str = "se3_locomotion_telemetry";
 pub const ACTION_FLAG_DRY_RUN: u32 = 1 << 0;
 pub const ACTION_FLAG_TIMEOUT: u32 = 1 << 1;
 pub const ACTION_FLAG_NONFINITE: u32 = 1 << 2;
@@ -35,7 +35,7 @@ pub const ACTION_FLAG_OUTPUT_DISABLED_HOLD: u32 = 1 << 3;
 pub const ACTION_FLAG_COMMAND_INACTIVE: u32 = 1 << 4;
 
 #[derive(Debug, Error)]
-pub enum RecoveryRuntimeError {
+pub enum LocomotionPolicyError {
     #[error("{0}")]
     Cdc(#[from] CdcError),
     #[error("{0}")]
@@ -68,19 +68,19 @@ pub enum RecoveryRuntimeError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecoveryTransport {
+pub enum LocomotionTransport {
     Cdc,
     Sim,
 }
 
 #[derive(Debug, Clone)]
-pub struct RecoveryRuntimeConfig {
+pub struct LocomotionPolicyConfig {
     pub checkpoint: PathBuf,
     pub ort_ep: String,
     pub command_source: CommandSourceKind,
     pub fixed_command: Command,
     pub robot_cfg: RobotConfig,
-    pub transport: RecoveryTransport,
+    pub transport: LocomotionTransport,
     pub port: String,
     pub sim_socket_path: PathBuf,
     pub sim_client_socket_path: PathBuf,
@@ -97,7 +97,7 @@ pub struct RecoveryRuntimeConfig {
     pub telemetry_flush_every: usize,
 }
 
-impl Default for RecoveryRuntimeConfig {
+impl Default for LocomotionPolicyConfig {
     fn default() -> Self {
         Self {
             checkpoint: PathBuf::new(),
@@ -105,7 +105,7 @@ impl Default for RecoveryRuntimeConfig {
             command_source: CommandSourceKind::Fixed,
             fixed_command: Command::idle(RobotConfig::default().default_base_height as f32),
             robot_cfg: RobotConfig::default(),
-            transport: RecoveryTransport::Cdc,
+            transport: LocomotionTransport::Cdc,
             port: DEFAULT_CDC_PORT.to_string(),
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
@@ -184,13 +184,13 @@ pub struct DecodedPolicyTarget {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecoveryActionTargetDecoder {
+pub struct LocomotionActionTargetDecoder {
     pub robot_cfg: RobotConfig,
     pub command_height: f32,
     decoder: PolicyActionDecoder,
 }
 
-impl RecoveryActionTargetDecoder {
+impl LocomotionActionTargetDecoder {
     pub fn new(command_height: f32, robot_cfg: Option<RobotConfig>) -> Self {
         let robot_cfg = robot_cfg.unwrap_or_default();
         let decoder = PolicyActionDecoder::new(PolicyActionDecoderConfig {
@@ -221,12 +221,12 @@ impl RecoveryActionTargetDecoder {
     }
 }
 
-pub struct RecoveryRuntime {
-    pub cfg: RecoveryRuntimeConfig,
+pub struct LocomotionPolicyRuntime {
+    pub cfg: LocomotionPolicyConfig,
     pub obs_cfg: ObservationConfig,
     policy: LoadedPolicy,
-    obs_builder: RecoveryObservationBuilder,
-    target_decoder: RecoveryActionTargetDecoder,
+    obs_builder: LocomotionObservationBuilder,
+    target_decoder: LocomotionActionTargetDecoder,
     pub stats: RuntimeStats,
     last_action: [f32; 6],
     action_seq: u32,
@@ -247,24 +247,25 @@ pub struct RecoveryRuntime {
     last_command_sample: RuntimeCommandSample,
 }
 
-impl RecoveryRuntime {
-    pub fn new(cfg: RecoveryRuntimeConfig) -> Result<Self, RecoveryRuntimeError> {
+impl LocomotionPolicyRuntime {
+    pub fn new(cfg: LocomotionPolicyConfig) -> Result<Self, LocomotionPolicyError> {
         let command_source = Box::new(FixedRuntimeCommandSource::new(cfg.fixed_command));
         Self::new_with_command_source(cfg, command_source)
     }
 
     pub fn new_with_command_source(
-        cfg: RecoveryRuntimeConfig,
+        cfg: LocomotionPolicyConfig,
         command_source: Box<dyn RuntimeCommandSource>,
-    ) -> Result<Self, RecoveryRuntimeError> {
+    ) -> Result<Self, LocomotionPolicyError> {
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
         let initial_command = LocomotionCommand::from_command(cfg.fixed_command, &cfg.robot_cfg);
-        let mut obs_builder = RecoveryObservationBuilder::with_robot_config(cfg.robot_cfg.clone())
-            .with_num_obs(policy.num_obs());
+        let mut obs_builder =
+            LocomotionObservationBuilder::with_robot_config(cfg.robot_cfg.clone())
+                .with_num_obs(policy.num_obs());
         obs_builder.set_command(initial_command);
-        let target_decoder = RecoveryActionTargetDecoder::new(
+        let target_decoder = LocomotionActionTargetDecoder::new(
             obs_builder.policy_command()[4],
             Some(cfg.robot_cfg.clone()),
         );
@@ -342,9 +343,9 @@ impl RecoveryRuntime {
         Ok(runtime)
     }
 
-    pub fn run(&mut self) -> Result<RuntimeStats, RecoveryRuntimeError> {
+    pub fn run(&mut self) -> Result<RuntimeStats, LocomotionPolicyError> {
         info!(
-            "NX recovery runtime: checkpoint={} iter={} type={} device={}",
+            "Locomotion policy runtime: checkpoint={} iter={} type={} device={}",
             self.cfg.checkpoint.display(),
             self.policy.iteration(),
             self.policy.policy_type(),
@@ -352,7 +353,7 @@ impl RecoveryRuntime {
         );
         let result = if self.cfg.dry_run {
             self.run_dry()
-        } else if self.cfg.transport == RecoveryTransport::Sim {
+        } else if self.cfg.transport == LocomotionTransport::Sim {
             self.run_sim()
         } else {
             self.run_cdc()
@@ -362,7 +363,7 @@ impl RecoveryRuntime {
         result.map(|_| self.stats.clone())
     }
 
-    fn run_dry(&mut self) -> Result<(), RecoveryRuntimeError> {
+    fn run_dry(&mut self) -> Result<(), LocomotionPolicyError> {
         let max_steps = if self.cfg.max_steps > 0 {
             self.cfg.max_steps
         } else {
@@ -370,7 +371,7 @@ impl RecoveryRuntime {
         };
         for step in 0..max_steps {
             let loop_started = Instant::now();
-            let state = synthetic_recovery_state(step as u32);
+            let state = synthetic_default_state(step as u32);
             self.stats.state_frames += 1;
             self.sample_command();
             let (action, flags, obs, policy_inference_ms) = if self.last_command_sample.active {
@@ -410,7 +411,7 @@ impl RecoveryRuntime {
         Ok(())
     }
 
-    fn run_sim(&mut self) -> Result<(), RecoveryRuntimeError> {
+    fn run_sim(&mut self) -> Result<(), LocomotionPolicyError> {
         let max_steps = self.cfg.max_steps;
         let period_s = 1.0 / self.cfg.rate_hz;
         self.sim_fourbar_surrogate = true;
@@ -430,14 +431,14 @@ impl RecoveryRuntime {
         let socket = match UnixDatagram::bind(&self.cfg.sim_client_socket_path) {
             Ok(socket) => socket,
             Err(err) => {
-                return Err(RecoveryRuntimeError::SimSocketBind {
+                return Err(LocomotionPolicyError::SimSocketBind {
                     client_socket_path: self.cfg.sim_client_socket_path.clone(),
                     source: err,
                 });
             }
         };
         if let Err(err) = socket.connect(&self.cfg.sim_socket_path) {
-            return Err(RecoveryRuntimeError::SimSocketConnect {
+            return Err(LocomotionPolicyError::SimSocketConnect {
                 sim_socket_path: self.cfg.sim_socket_path.clone(),
                 client_socket_path: self.cfg.sim_client_socket_path.clone(),
                 source: err,
@@ -452,7 +453,7 @@ impl RecoveryRuntime {
                 "sim_client_socket_path": self.cfg.sim_client_socket_path,
             }),
         )?;
-        let handshake_state = synthetic_recovery_state(0);
+        let handshake_state = synthetic_default_state(0);
         let handshake = self.make_hold_target_packet(&handshake_state)?;
         socket.send(&handshake)?;
         let mut parser = StreamParser::default();
@@ -537,7 +538,7 @@ impl RecoveryRuntime {
         data: &[u8],
         mut latest_state: Option<PolicyStateFrame>,
         mut latest_state_time: Instant,
-    ) -> Result<(Option<PolicyStateFrame>, Instant), RecoveryRuntimeError> {
+    ) -> Result<(Option<PolicyStateFrame>, Instant), LocomotionPolicyError> {
         for message in parser.feed(data) {
             if message.msg_type != MSG_POLICY_STATE {
                 continue;
@@ -554,7 +555,7 @@ impl RecoveryRuntime {
         Ok((latest_state, latest_state_time))
     }
 
-    fn run_cdc(&mut self) -> Result<(), RecoveryRuntimeError> {
+    fn run_cdc(&mut self) -> Result<(), LocomotionPolicyError> {
         let max_steps = self.cfg.max_steps;
         let period_s = 1.0 / self.cfg.rate_hz;
         self.sim_fourbar_surrogate = false;
@@ -567,7 +568,7 @@ impl RecoveryRuntime {
             let mut next_tick = Instant::now();
             let port = resolve_cdc_port(&self.cfg.port);
             self.resolved_port = Some(port.clone());
-            let loop_result = (|| -> Result<(), RecoveryRuntimeError> {
+            let loop_result = (|| -> Result<(), LocomotionPolicyError> {
                 let mut serial = CdcSerial::new(&port, self.cfg.baudrate);
                 serial.open()?;
                 info!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
@@ -643,7 +644,7 @@ impl RecoveryRuntime {
 
             match loop_result {
                 Ok(()) => return Ok(()),
-                Err(RecoveryRuntimeError::Cdc(
+                Err(LocomotionPolicyError::Cdc(
                     err @ (CdcError::Disconnected(_) | CdcError::WriteTimeout(_)),
                 )) => {
                     let error_text = err.to_string();
@@ -674,7 +675,7 @@ impl RecoveryRuntime {
         parser: &mut StreamParser,
         mut latest_state: Option<PolicyStateFrame>,
         mut latest_state_time: Instant,
-    ) -> Result<(Option<PolicyStateFrame>, Instant), RecoveryRuntimeError> {
+    ) -> Result<(Option<PolicyStateFrame>, Instant), LocomotionPolicyError> {
         loop {
             let data = serial.read_available()?;
             if data.is_empty() {
@@ -696,7 +697,7 @@ impl RecoveryRuntime {
     fn build_observation(
         &self,
         state: &PolicyStateFrame,
-    ) -> Result<(Vec<f32>, u32), RecoveryRuntimeError> {
+    ) -> Result<(Vec<f32>, u32), LocomotionPolicyError> {
         let result = self.obs_builder.build(state, self.last_action)?;
         let flags = if result.had_nonfinite_input {
             ACTION_FLAG_NONFINITE
@@ -710,7 +711,7 @@ impl RecoveryRuntime {
         &mut self,
         state: &PolicyStateFrame,
         age_s: f64,
-    ) -> Result<StepOutput, RecoveryRuntimeError> {
+    ) -> Result<StepOutput, LocomotionPolicyError> {
         let mut flags = 0_u32;
         let policy_inference_ms;
         let obs;
@@ -786,7 +787,7 @@ impl RecoveryRuntime {
     fn act_from_state(
         &mut self,
         state: &PolicyStateFrame,
-    ) -> Result<([f32; 6], u32, Vec<f32>, f64), RecoveryRuntimeError> {
+    ) -> Result<([f32; 6], u32, Vec<f32>, f64), LocomotionPolicyError> {
         let (obs, mut flags) = self.build_observation(state)?;
         let started = Instant::now();
         let action_vec = self.policy.act(&obs)?;
@@ -828,7 +829,7 @@ impl RecoveryRuntime {
         &mut self,
         force: bool,
         reason: &str,
-    ) -> Result<(), RecoveryRuntimeError> {
+    ) -> Result<(), LocomotionPolicyError> {
         if self.policy_memory_clean && !force {
             return Ok(());
         }
@@ -846,7 +847,7 @@ impl RecoveryRuntime {
         Ok(())
     }
 
-    fn make_target_packet(&mut self, action: [f32; 6]) -> Result<Vec<u8>, RecoveryRuntimeError> {
+    fn make_target_packet(&mut self, action: [f32; 6]) -> Result<Vec<u8>, LocomotionPolicyError> {
         let target = self.decode_target(action)?;
         let joint_pos = self.target_joint_pos_for_transport(target.joint_pos);
         let frame = PolicyTargetFrame {
@@ -861,7 +862,7 @@ impl RecoveryRuntime {
     fn make_hold_target_packet(
         &mut self,
         state: &PolicyStateFrame,
-    ) -> Result<Vec<u8>, RecoveryRuntimeError> {
+    ) -> Result<Vec<u8>, LocomotionPolicyError> {
         let joint_pos = state.joint_pos;
         let wheel_vel = [0.0, 0.0];
         self.stats.last_target_joint_pos = joint_pos;
@@ -876,7 +877,7 @@ impl RecoveryRuntime {
         Ok(pack_policy_target(&frame)?)
     }
 
-    fn make_command_packet(&self) -> Result<Vec<u8>, RecoveryRuntimeError> {
+    fn make_command_packet(&self) -> Result<Vec<u8>, LocomotionPolicyError> {
         let frame = PolicyCommandFrame {
             seq: self.action_seq.wrapping_sub(1),
             command: self.obs_builder.policy_command(),
@@ -895,7 +896,7 @@ impl RecoveryRuntime {
     fn decode_target(
         &mut self,
         action: [f32; 6],
-    ) -> Result<DecodedPolicyTarget, RecoveryRuntimeError> {
+    ) -> Result<DecodedPolicyTarget, LocomotionPolicyError> {
         let target = self.target_decoder.decode(action)?;
         self.stats.last_target_joint_pos = target.joint_pos;
         self.stats.last_target_wheel_vel = target.wheel_vel;
@@ -934,7 +935,7 @@ impl RecoveryRuntime {
         action: &[f32; 6],
         flags: u32,
         timing: TelemetryTiming,
-    ) -> Result<(), RecoveryRuntimeError> {
+    ) -> Result<(), LocomotionPolicyError> {
         let now = Instant::now();
         let loop_dt_ms = self
             .last_sample_monotonic
@@ -1085,7 +1086,7 @@ impl RecoveryRuntime {
         &mut self,
         event: &str,
         fields: serde_json::Value,
-    ) -> Result<(), RecoveryRuntimeError> {
+    ) -> Result<(), LocomotionPolicyError> {
         let mut record = json!({
             "schema": TELEMETRY_SCHEMA,
             "record_type": "event",
@@ -1168,12 +1169,12 @@ impl RecoveryRuntime {
 pub fn load_policy_runtime(
     checkpoint: &Path,
     ort_ep: &str,
-) -> Result<LoadedPolicy, RecoveryRuntimeError> {
+) -> Result<LoadedPolicy, LocomotionPolicyError> {
     match checkpoint.extension().and_then(|value| value.to_str()) {
         Some("onnx") => Ok(LoadedPolicy::Ort(Box::new(OrtPolicyRuntime::new(
             checkpoint, ort_ep,
         )?))),
-        _ => Err(RecoveryRuntimeError::UnsupportedCheckpoint(
+        _ => Err(LocomotionPolicyError::UnsupportedCheckpoint(
             checkpoint.to_path_buf(),
         )),
     }
@@ -1210,7 +1211,7 @@ impl LoadedPolicy {
         }
     }
 
-    fn act(&mut self, obs: &[f32]) -> Result<Vec<f32>, RecoveryRuntimeError> {
+    fn act(&mut self, obs: &[f32]) -> Result<Vec<f32>, LocomotionPolicyError> {
         match self {
             Self::Ort(policy) => Ok(policy.act(obs)?),
             #[cfg(test)]
@@ -1334,7 +1335,7 @@ impl TelemetryLogger {
         })
     }
 
-    pub fn write_meta(&mut self, meta: &serde_json::Value) -> Result<(), RecoveryRuntimeError> {
+    pub fn write_meta(&mut self, meta: &serde_json::Value) -> Result<(), LocomotionPolicyError> {
         let Some(path) = self.meta_path.as_ref() else {
             return Ok(());
         };
@@ -1348,14 +1349,14 @@ impl TelemetryLogger {
         &mut self,
         step: usize,
         record: &serde_json::Value,
-    ) -> Result<(), RecoveryRuntimeError> {
+    ) -> Result<(), LocomotionPolicyError> {
         if self.file.is_none() || !step.is_multiple_of(self.every) {
             return Ok(());
         }
         self.write_line(record)
     }
 
-    pub fn write_event(&mut self, record: &serde_json::Value) -> Result<(), RecoveryRuntimeError> {
+    pub fn write_event(&mut self, record: &serde_json::Value) -> Result<(), LocomotionPolicyError> {
         if self.file.is_none() {
             return Ok(());
         }
@@ -1366,7 +1367,7 @@ impl TelemetryLogger {
         Ok(())
     }
 
-    fn write_line(&mut self, record: &serde_json::Value) -> Result<(), RecoveryRuntimeError> {
+    fn write_line(&mut self, record: &serde_json::Value) -> Result<(), LocomotionPolicyError> {
         let Some(file) = self.file.as_mut() else {
             return Ok(());
         };
@@ -1415,7 +1416,10 @@ fn resolve_telemetry_log_path(path: PathBuf) -> Result<PathBuf, std::io::Error> 
         return Ok(path);
     }
     std::fs::create_dir_all(&path)?;
-    Ok(path.join(format!("recovery_telemetry_{}.jsonl", unix_time_s() as u64)))
+    Ok(path.join(format!(
+        "locomotion_telemetry_{}.jsonl",
+        unix_time_s() as u64
+    )))
 }
 
 fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
@@ -1471,7 +1475,7 @@ fn sha256_file(path: &Path) -> Result<Option<String>, std::io::Error> {
     Ok(Some(hex_lower(&digest)))
 }
 
-fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
+fn runtime_config_json(cfg: &LocomotionPolicyConfig) -> serde_json::Value {
     json!({
         "checkpoint": cfg.checkpoint,
         "ort_ep": cfg.ort_ep,
@@ -1479,8 +1483,8 @@ fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
         "fixed_command": cfg.fixed_command.chassis.map(|command| command.to_policy_command()),
         "robot_default_base_height": cfg.robot_cfg.default_base_height,
         "transport": match cfg.transport {
-            RecoveryTransport::Cdc => "cdc",
-            RecoveryTransport::Sim => "sim",
+            LocomotionTransport::Cdc => "cdc",
+            LocomotionTransport::Sim => "sim",
         },
         "port": cfg.port,
         "sim_socket_path": cfg.sim_socket_path,
@@ -1639,7 +1643,7 @@ mod tests {
 
     #[test]
     fn target_decoder_matches_python_reference() {
-        let decoder = RecoveryActionTargetDecoder::new(0.22, None);
+        let decoder = LocomotionActionTargetDecoder::new(0.22, None);
         let target = decoder.decode([0.2, -0.3, 0.4, -0.5, 0.6, -0.7]).unwrap();
         assert_close(
             &target.joint_pos,
@@ -1659,7 +1663,7 @@ mod tests {
             robot.default_dof_pos[3] as f32,
         ];
         let output_pos = policy_to_output_pos(policy_pos.map(|value| value as f64));
-        let mut state = synthetic_recovery_state(3);
+        let mut state = synthetic_default_state(3);
         state.joint_pos = output_pos.map(|value| value as f32);
         state.joint_vel = [0.4, -0.7, -0.2, 0.3];
         state.target_joint_pos = state.joint_pos;
@@ -1689,7 +1693,7 @@ mod tests {
         let packet = runtime
             .make_hold_target_packet(&PolicyStateFrame {
                 joint_pos: policy_pos,
-                ..synthetic_recovery_state(11)
+                ..synthetic_default_state(11)
             })
             .unwrap();
         let messages = StreamParser::default().feed(&packet);
@@ -1715,14 +1719,14 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    fn test_runtime_without_policy() -> RecoveryRuntime {
+    fn test_runtime_without_policy() -> LocomotionPolicyRuntime {
         let now = Instant::now();
-        RecoveryRuntime {
-            cfg: RecoveryRuntimeConfig::default(),
+        LocomotionPolicyRuntime {
+            cfg: LocomotionPolicyConfig::default(),
             obs_cfg: ObservationConfig::default(),
             policy: LoadedPolicy::Noop,
-            obs_builder: RecoveryObservationBuilder::new(),
-            target_decoder: RecoveryActionTargetDecoder::new(0.22, None),
+            obs_builder: LocomotionObservationBuilder::new(),
+            target_decoder: LocomotionActionTargetDecoder::new(0.22, None),
             stats: RuntimeStats::default(),
             last_action: [0.0; 6],
             action_seq: 0,

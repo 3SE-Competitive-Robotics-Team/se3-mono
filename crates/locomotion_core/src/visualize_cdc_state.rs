@@ -14,11 +14,11 @@ use thiserror::Error;
 use crate::{RobotConfig, policy_to_output_pos};
 
 use crate::cdc::{CdcError, CdcSerial, resolve_cdc_port};
+use crate::policy_observation::{LocomotionObservationBuilder, synthetic_default_state};
 use crate::protocol::{
     MSG_LATENCY, MSG_POLICY_STATE, PolicyLatencyFrame, PolicyStateFrame, ProtocolError,
     StreamParser, decode_policy_latency, decode_policy_state,
 };
-use crate::recovery_observation::{RecoveryObservationBuilder, synthetic_recovery_state};
 
 #[derive(Debug, Clone)]
 pub struct VisualizerConfig {
@@ -160,12 +160,12 @@ pub fn run_visualizer(cfg: VisualizerConfig) -> Result<(), VisualizerError> {
 
 fn spawn_synthetic_reader(shared: Arc<Mutex<SharedSnapshot>>, stop: Arc<AtomicBool>, rate_hz: f64) {
     thread::spawn(move || {
-        let builder = RecoveryObservationBuilder::new();
+        let builder = LocomotionObservationBuilder::new();
         let period = Duration::from_secs_f64(1.0 / rate_hz.max(1.0));
         let mut seq = 0_u32;
         let mut last_wall_time: Option<f64> = None;
         while !stop.load(Ordering::SeqCst) {
-            let mut state = synthetic_recovery_state(seq);
+            let mut state = synthetic_default_state(seq);
             let t = seq as f32 * period.as_secs_f32();
             state.joint_pos[0] += 0.12 * t.sin();
             state.joint_pos[1] -= 0.08 * (t * 0.7).sin();
@@ -195,7 +195,7 @@ fn spawn_cdc_reader(
     read_timeout_s: f64,
 ) {
     thread::spawn(move || {
-        let builder = RecoveryObservationBuilder::new();
+        let builder = LocomotionObservationBuilder::new();
         let mut parser = StreamParser::default();
         let mut last_wall_time: Option<f64> = None;
         while !stop.load(Ordering::SeqCst) {
@@ -464,7 +464,7 @@ fn write_response(
 
 fn state_to_snapshot(
     state: &PolicyStateFrame,
-    builder: &RecoveryObservationBuilder,
+    builder: &LocomotionObservationBuilder,
     source: &str,
     frame_hz: Option<f64>,
     port: Option<&str>,
@@ -475,7 +475,7 @@ fn state_to_snapshot(
             crate::policy_io::PolicyIoError::ObservationShapeMismatch { expected, got }
                 if expected == 34 && got == 32 =>
             {
-                RecoveryObservationBuilder::new()
+                LocomotionObservationBuilder::new()
                     .with_num_obs(32)
                     .build(state, [0.0; 6])
             }
@@ -594,14 +594,14 @@ fn observation_slices(obs: Vec<f32>) -> Map<String, Value> {
         map.insert("wheel_pos_zero[21:23]".to_string(), json!(&obs[21..23]));
         map.insert("wheel_vel[23:25]".to_string(), json!(&obs[23..25]));
         map.insert("last_action[25:31]".to_string(), json!(&obs[25..31]));
-        map.insert("recovery_cmd[31:34]".to_string(), json!(&obs[31..34]));
+        map.insert("command_residual[31:34]".to_string(), json!(&obs[31..34]));
     } else {
         map.insert("leg_pos[11:15]".to_string(), json!(&obs[11..15]));
         map.insert("leg_vel[15:19]".to_string(), json!(&obs[15..19]));
         map.insert("wheel_pos_zero[19:21]".to_string(), json!(&obs[19..21]));
         map.insert("wheel_vel[21:23]".to_string(), json!(&obs[21..23]));
         map.insert("last_action[23:29]".to_string(), json!(&obs[23..29]));
-        map.insert("recovery_cmd[29:32]".to_string(), json!(&obs[29..32]));
+        map.insert("command_residual[29:32]".to_string(), json!(&obs[29..32]));
     }
     map
 }

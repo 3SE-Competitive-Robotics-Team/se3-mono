@@ -1,12 +1,12 @@
-# SerialLeg Recovery Rust Port
+# SerialLeg Locomotion Policy Rust Port
 
 这个目录是 `Serialleg_deploy_python` 的 Rust 版移植。
 
-Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 手写 NPZ 推理路径。默认执行器为 `--ort-ep auto`。
+策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 手写 NPZ 推理路径。默认执行器为 `--ort-ep auto`。
 
 ## 架构分层
 
-- `apps/locomotion`: 真机 recovery 策略进程入口。
+- `apps/locomotion`: 真机 locomotion 策略进程入口。
 - `apps/sim_loop`: 本地 MuJoCo 仿真循环入口，通过 Unix datagram 和 locomotion 闭环交换策略状态与动作目标。
 - `apps/replay_telemetry`: 回放 NX telemetry，并用同一个 ORT policy 复算动作。
 - `apps/visualize_cdc_state`: CDC/remote/synthetic 状态可视化入口。
@@ -18,10 +18,10 @@ Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 
 
 - `src/se3_shared/*` -> `crates/locomotion_core/src/*`
 - `src/se3_deploy/protocol.py` -> `crates/locomotion_core/src/protocol.rs`
-- `src/se3_deploy/observation.py` -> `crates/locomotion_core/src/recovery_observation.rs`
+- `src/se3_deploy/observation.py` -> `crates/locomotion_core/src/policy_observation.rs`
 - `src/se3_deploy/onnx_policy.py` -> `crates/locomotion_core/src/ort_policy.rs`
 - `src/se3_deploy/export_onnx.py` -> 外部 ONNX artifact，由 `SE3_RECOVERY_CHECKPOINT` 指定
-- `src/se3_deploy/recovery_runtime.py` -> `crates/locomotion_core/src/recovery_runtime.rs`
+- `src/se3_deploy/recovery_runtime.py` -> `crates/locomotion_core/src/policy_runtime.rs`
 - `src/se3_deploy/replay_telemetry.py` -> `crates/locomotion_core/src/replay_telemetry.rs`
 - `src/se3_deploy/visualize_cdc_state.py` -> `crates/locomotion_core/src/visualize_cdc_state.rs`
 - `run_recovery.sh` -> `scripts/run_recovery.sh`
@@ -129,7 +129,7 @@ no_proxy="localhost,127.0.0.1,::1,192.168.137.100" \
 
 - `source=remote` 且 `connected=false`: 本机 viewer 连到了 NX relay，但 NX relay 没读到 STM32 CDC。查看 `ssh serialleg-nx "tail -80 /tmp/se3_cdc_visualizer.log"`。
 - 无法访问 `http://192.168.137.100:8081`: NX relay 未启动，或本机到 NX 网络不通。
-- `target_age_ms` 持续增长: NX 没有持续下发 target。检查 recovery runtime、遥控总开关和 STM32 target 接收。
+- `target_age_ms` 持续增长: NX 没有持续下发 target。检查 locomotion policy runtime、遥控总开关和 STM32 target 接收。
 
 限制：
 
