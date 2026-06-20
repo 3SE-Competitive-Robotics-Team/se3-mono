@@ -128,7 +128,13 @@ pub fn init(config: &LoggerConfig) -> LogResult<Option<LoggerGuard>> {
     if config.file_log_enable {
         let file_filter: RustLogFilter = config.file_log_filter.as_str().into();
         let now = Zoned::now();
-        let file_name = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
+        let file_name = format!(
+            "{:02}:{:02}:{:02}-pid{}",
+            now.hour(),
+            now.minute(),
+            now.second(),
+            std::process::id()
+        );
         let directory_name = daily_log_dir(&now);
         std::fs::create_dir_all(&directory_name).map_err(|source| {
             LogError::CreateLogDirectory {
