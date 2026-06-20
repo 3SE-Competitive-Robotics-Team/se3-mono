@@ -1,5 +1,7 @@
 use std::f64::consts::PI;
 
+use serde::{Deserialize, Serialize};
+
 use crate::action_delay::ActionDelayConfig;
 use crate::motor::{DM8009P, M3508_C620_14};
 
@@ -80,7 +82,8 @@ impl JointGroup {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Termination {
     pub terminate_on_fall: bool,
     pub fail_tilt_deg: f64,
@@ -97,7 +100,8 @@ impl Default for Termination {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RobotConfig {
     pub leg_kp: f64,
     pub leg_kd: f64,

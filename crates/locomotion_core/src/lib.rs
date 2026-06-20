@@ -27,8 +27,8 @@ pub use height_default::policy_default_from_height;
 pub use motor::{DM8009P, M3508_C620_14, M3508_HEXROLL, MotorSpec};
 pub use observation_config::ObservationConfig;
 pub use policy_io::{
-    DecodedPolicyAction, JointState, PolicyActionDecoder, PolicyObservationConfig,
-    PolicyObservationResult, build_policy_observation,
+    DecodedPolicyAction, JointState, PolicyActionDecoder, PolicyActionDecoderConfig,
+    PolicyObservationConfig, PolicyObservationResult, build_policy_observation,
 };
 pub use robot::{Joint, JointGroup, RobotConfig, Termination};
 

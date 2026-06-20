@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq)]
@@ -12,8 +13,9 @@ pub enum ActionDelayError {
     DelayOutsideRandomRange { delay: f64, min: f64, max: f64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelayResampleMode {
+    #[default]
     Reset,
 }
 
@@ -27,7 +29,8 @@ pub fn delay_seconds_to_steps(delay_s: f64, sim_dt: f64) -> Result<usize, Action
     Ok(((delay_s / sim_dt) + 0.5).floor().max(0.0) as usize)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ActionDelayConfig {
     pub enabled: bool,
     pub delay_s: f64,

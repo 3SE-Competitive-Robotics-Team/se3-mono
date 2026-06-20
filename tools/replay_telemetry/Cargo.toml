@@ -10,3 +10,4 @@ workspace = true
 clap.workspace = true
 locomotion_core.workspace = true
 se3_log.workspace = true
+zoo.workspace = true

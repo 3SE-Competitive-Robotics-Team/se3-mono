@@ -4984,6 +4984,7 @@ dependencies = [
  "ort",
  "se3_command",
  "se3_ort_ep",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
@@ -9577,6 +9578,7 @@ dependencies = [
  "clap",
  "locomotion_core",
  "se3_log",
+ "zoo",
 ]
 
 [[package]]

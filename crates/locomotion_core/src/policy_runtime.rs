@@ -80,6 +80,7 @@ pub struct LocomotionPolicyConfig {
     pub command_source: CommandSourceKind,
     pub fixed_command: Command,
     pub robot_cfg: RobotConfig,
+    pub action_decoder: PolicyActionDecoderConfig,
     pub transport: LocomotionTransport,
     pub port: String,
     pub sim_socket_path: PathBuf,
@@ -99,12 +100,17 @@ pub struct LocomotionPolicyConfig {
 
 impl Default for LocomotionPolicyConfig {
     fn default() -> Self {
+        let robot_cfg = RobotConfig::default();
         Self {
             checkpoint: PathBuf::new(),
             ort_ep: "auto".to_string(),
             command_source: CommandSourceKind::Fixed,
-            fixed_command: Command::idle(RobotConfig::default().default_base_height as f32),
-            robot_cfg: RobotConfig::default(),
+            fixed_command: Command::idle(robot_cfg.default_base_height as f32),
+            action_decoder: PolicyActionDecoderConfig {
+                robot_cfg: robot_cfg.clone(),
+                ..PolicyActionDecoderConfig::default()
+            },
+            robot_cfg,
             transport: LocomotionTransport::Cdc,
             port: DEFAULT_CDC_PORT.to_string(),
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
@@ -191,14 +197,9 @@ pub struct LocomotionActionTargetDecoder {
 }
 
 impl LocomotionActionTargetDecoder {
-    pub fn new(command_height: f32, robot_cfg: Option<RobotConfig>) -> Self {
-        let robot_cfg = robot_cfg.unwrap_or_default();
-        let decoder = PolicyActionDecoder::new(PolicyActionDecoderConfig {
-            robot_cfg: robot_cfg.clone(),
-            height_conditioned_action_default: true,
-            active_rod_semantics: true,
-            ..PolicyActionDecoderConfig::default()
-        });
+    pub fn new(command_height: f32, config: PolicyActionDecoderConfig) -> Self {
+        let decoder = PolicyActionDecoder::new(config);
+        let robot_cfg = decoder.robot_cfg.clone();
         Self {
             robot_cfg,
             command_height,
@@ -267,7 +268,7 @@ impl LocomotionPolicyRuntime {
         obs_builder.set_command(initial_command);
         let target_decoder = LocomotionActionTargetDecoder::new(
             obs_builder.policy_command()[4],
-            Some(cfg.robot_cfg.clone()),
+            cfg.action_decoder.clone(),
         );
         let now = Instant::now();
         let session_id = format!("{}_{}", unix_time_s() as u64, std::process::id());
@@ -307,11 +308,7 @@ impl LocomotionPolicyRuntime {
             },
             "command": obs_builder.policy_command(),
             "command_source": cfg.command_source.as_str(),
-            "action_decoder": {
-                "height_conditioned_action_default": true,
-                "active_rod_semantics": true,
-                "command_height": target_decoder.command_height,
-            }
+            "action_decoder": action_decoder_config_json(&cfg.action_decoder, target_decoder.command_height)
         }))?;
         let last_command_sample = RuntimeCommandSample::fixed(cfg.fixed_command);
         let mut runtime = Self {
@@ -1482,6 +1479,7 @@ fn runtime_config_json(cfg: &LocomotionPolicyConfig) -> serde_json::Value {
         "command_source": cfg.command_source.as_str(),
         "fixed_command": cfg.fixed_command.chassis.map(|command| command.to_policy_command()),
         "robot_default_base_height": cfg.robot_cfg.default_base_height,
+        "action_decoder": cfg.action_decoder,
         "transport": match cfg.transport {
             LocomotionTransport::Cdc => "cdc",
             LocomotionTransport::Sim => "sim",
@@ -1501,6 +1499,17 @@ fn runtime_config_json(cfg: &LocomotionPolicyConfig) -> serde_json::Value {
         "telemetry_log_every": cfg.telemetry_log_every,
         "telemetry_flush_every": cfg.telemetry_flush_every,
     })
+}
+
+fn action_decoder_config_json(
+    config: &PolicyActionDecoderConfig,
+    command_height: f32,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(config).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("command_height".to_string(), json!(command_height));
+    }
+    value
 }
 
 fn sim_output_state_to_policy_state(mut state: PolicyStateFrame) -> PolicyStateFrame {
@@ -1643,7 +1652,7 @@ mod tests {
 
     #[test]
     fn target_decoder_matches_python_reference() {
-        let decoder = LocomotionActionTargetDecoder::new(0.22, None);
+        let decoder = LocomotionActionTargetDecoder::new(0.22, recovery_action_decoder_config());
         let target = decoder.decode([0.2, -0.3, 0.4, -0.5, 0.6, -0.7]).unwrap();
         assert_close(
             &target.joint_pos,
@@ -1726,7 +1735,10 @@ mod tests {
             obs_cfg: ObservationConfig::default(),
             policy: LoadedPolicy::Noop,
             obs_builder: LocomotionObservationBuilder::new(),
-            target_decoder: LocomotionActionTargetDecoder::new(0.22, None),
+            target_decoder: LocomotionActionTargetDecoder::new(
+                0.22,
+                recovery_action_decoder_config(),
+            ),
             stats: RuntimeStats::default(),
             last_action: [0.0; 6],
             action_seq: 0,
@@ -1758,6 +1770,14 @@ mod tests {
     fn assert_close<const N: usize>(actual: &[f32; N], expected: &[f32; N], tol: f32) {
         for (idx, (a, e)) in actual.iter().zip(expected).enumerate() {
             assert!((*a - *e).abs() <= tol, "idx {idx}: actual {a} expected {e}");
+        }
+    }
+
+    fn recovery_action_decoder_config() -> PolicyActionDecoderConfig {
+        PolicyActionDecoderConfig {
+            height_conditioned_action_default: true,
+            active_rod_semantics: true,
+            ..PolicyActionDecoderConfig::default()
         }
     }
 }

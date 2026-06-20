@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::fourbar::{output_to_policy_pos, output_to_policy_vel};
@@ -48,7 +49,8 @@ impl Default for PolicyActionDecoder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PolicyActionDecoderConfig {
     pub robot_cfg: RobotConfig,
     pub action_scale: Option<[f32; 6]>,
