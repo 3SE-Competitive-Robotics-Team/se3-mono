@@ -102,8 +102,8 @@ pub struct DetectorCfg {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ArmorDetectorCfg {
-    pub model_path: String,
-    pub engine_path: String,
+    pub model_path: PathBuf,
+    pub engine_path: PathBuf,
     pub score_threshold: f32,
     pub confidence_threshold: f32,
     pub nms_iou_threshold: f32,
@@ -111,8 +111,8 @@ pub struct ArmorDetectorCfg {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EnergyMechanismDetectorCfg {
-    pub model_path: String,
-    pub engine_path: String,
+    pub model_path: PathBuf,
+    pub engine_path: PathBuf,
     pub confidence_threshold: f32,
     pub nms_iou_threshold: f32,
 }

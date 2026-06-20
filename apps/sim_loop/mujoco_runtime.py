@@ -143,6 +143,11 @@ class MujocoRuntime:
         self.data.ctrl[:] = ctrl
         return ctrl
 
+    def disable_actuators(self) -> np.ndarray:
+        ctrl = np.zeros_like(self.data.ctrl, dtype=np.float64)
+        self.data.ctrl[:] = ctrl
+        return ctrl
+
     def step(self) -> None:
         mujoco.mj_step(self.model, self.data)
 

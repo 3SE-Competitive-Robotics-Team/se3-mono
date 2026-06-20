@@ -11,7 +11,6 @@ use crate::rbt_threads::{
 use auto_aim_core::rbt_infra::rbt_err::{RbtError, RbtResult};
 use auto_aim_core::rbt_infra::rbt_global::GENERIC_RBT_CFG;
 use auto_aim_core::rbt_infra::rbt_log;
-use auto_aim_core::rbt_infra::rbt_ort_ep::configure_session_builder;
 use auto_aim_core::rbt_infra::rbt_queue_async::RbtSPSCQueueAsync;
 use auto_aim_core::rbt_mod::rbt_comm::rbt_comm_frame::{CtrlData, SensData};
 use auto_aim_core::rbt_mod::rbt_detector::rbt_frame::RbtFrame;
@@ -22,6 +21,7 @@ use auto_aim_core::rbt_mod::rbt_runtime_router::RuntimeRouter;
 use auto_aim_core::rbt_mod::rbt_solver::RbtSolvedResults;
 use log::info;
 use ort::session::Session;
+use se3_ort_ep::configure_session_builder;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -89,10 +89,9 @@ async fn main() -> RbtResult<()> {
     let runtime_completion = RuntimePipelineCompletion::new();
     let cfg = GENERIC_RBT_CFG.read().expect("rwlock poisoned").clone();
 
-    let model_path = Path::new(cfg.detector_cfg.armor.model_path.as_str());
+    let model_path = cfg.detector_cfg.armor.model_path.as_path();
     ensure_required_file(model_path, "armor model file")?;
-    let energy_mechanism_model_path =
-        Path::new(cfg.detector_cfg.energy_mechanism.model_path.as_str());
+    let energy_mechanism_model_path = cfg.detector_cfg.energy_mechanism.model_path.as_path();
     ensure_required_file(energy_mechanism_model_path, "energy mechanism model file")?;
     let video_path = video_input_path();
     ensure_required_file(&video_path, "video input file")?;
@@ -102,19 +101,19 @@ async fn main() -> RbtResult<()> {
     let (session_builder, ort_ep) = configure_session_builder(
         session_builder,
         cfg.detector_cfg.ort_ep.as_str(),
-        cfg.detector_cfg.armor.engine_path.as_str(),
+        cfg.detector_cfg.armor.engine_path.as_path(),
     )?;
     info!("using ONNX Runtime execution provider: {}", ort_ep.as_str());
     let session = session_builder
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
         .with_inter_threads(8)?
-        .commit_from_file(cfg.detector_cfg.armor.model_path.as_str())?;
+        .commit_from_file(&cfg.detector_cfg.armor.model_path)?;
 
     let energy_session_builder = Session::builder()?;
     let (energy_session_builder, energy_ort_ep) = configure_session_builder(
         energy_session_builder,
         cfg.detector_cfg.ort_ep.as_str(),
-        cfg.detector_cfg.energy_mechanism.engine_path.as_str(),
+        cfg.detector_cfg.energy_mechanism.engine_path.as_path(),
     )?;
     info!(
         "using ONNX Runtime execution provider for energy mechanism: {}",
@@ -123,7 +122,7 @@ async fn main() -> RbtResult<()> {
     let energy_session = energy_session_builder
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
         .with_inter_threads(8)?
-        .commit_from_file(cfg.detector_cfg.energy_mechanism.model_path.as_str())?;
+        .commit_from_file(&cfg.detector_cfg.energy_mechanism.model_path)?;
 
     // let session = Arc::new(Mutex::new(session));
     let pre_task_handler = pre_process(
@@ -211,8 +210,20 @@ async fn main() -> RbtResult<()> {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
-    use ort::ep;
     use ort::value::{TensorElementType, ValueType};
+
+    fn load_model_for_contract_test(model_path: &Path) -> ort::Result<Session> {
+        let engine_cache_path = model_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("ort_engine_cache");
+        std::fs::create_dir_all(&engine_cache_path).ok();
+        let session_builder = Session::builder().expect("session builder should be available");
+        let (mut session_builder, _) =
+            configure_session_builder(session_builder, "auto", engine_cache_path.as_path())
+                .expect("auto execution provider should be configurable");
+        session_builder.commit_from_file(model_path)
+    }
 
     #[test]
     fn required_file_rejects_directory() {
@@ -234,14 +245,7 @@ mod tests {
             return;
         }
 
-        let session = Session::builder()
-            .expect("session builder should be available")
-            .with_execution_providers([ep::CPUExecutionProvider::default()
-                .with_arena_allocator(true)
-                .build()])
-            .expect("CPU execution provider should be configurable")
-            .commit_from_file(&model_path)
-            .expect("Armor.onnx should load");
+        let session = load_model_for_contract_test(&model_path).expect("Armor.onnx should load");
 
         let input = &session.inputs()[0];
         assert_eq!(input.name(), "images");
@@ -276,14 +280,8 @@ mod tests {
             return;
         }
 
-        let session = Session::builder()
-            .expect("session builder should be available")
-            .with_execution_providers([ep::CPUExecutionProvider::default()
-                .with_arena_allocator(true)
-                .build()])
-            .expect("CPU execution provider should be configurable")
-            .commit_from_file(&model_path)
-            .expect("EngineMechanism.onnx should load");
+        let session =
+            load_model_for_contract_test(&model_path).expect("EngineMechanism.onnx should load");
 
         let input = &session.inputs()[0];
         assert_eq!(input.name(), "images");

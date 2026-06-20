@@ -57,6 +57,9 @@ pub enum RbtError {
     #[error("Unsupported execution provider: {0}")]
     UnsupportedExecutionProvider(String),
 
+    #[error("{0}")]
+    OrtEp(#[from] se3_ort_ep::OrtEpError),
+
     // 可视化相关错误
     #[error("Rerun Recording Stream Error: {0}")]
     RerunRecordingStreamError(#[from] rr::RecordingStreamError),

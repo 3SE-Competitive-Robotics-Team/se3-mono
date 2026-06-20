@@ -3,13 +3,14 @@ use crate::{
     build_policy_observation,
 };
 
+use crate::LocomotionCommand;
 use crate::protocol::PolicyStateFrame;
 
 #[derive(Debug, Clone)]
 pub struct RecoveryObservationBuilder {
     pub default_dof_pos: [f32; 6],
     pub command_scale: [f32; 5],
-    pub command: [f32; 8],
+    pub command: LocomotionCommand,
     pub num_obs: usize,
 }
 
@@ -22,20 +23,15 @@ impl Default for RecoveryObservationBuilder {
 impl RecoveryObservationBuilder {
     pub fn new() -> Self {
         let robot_cfg = RobotConfig::default();
+        Self::with_robot_config(robot_cfg)
+    }
+
+    pub fn with_robot_config(robot_cfg: RobotConfig) -> Self {
         let obs_cfg = ObservationConfig::default();
         Self {
             default_dof_pos: robot_cfg.default_dof_pos.map(|v| v as f32),
             command_scale: obs_cfg.command_scale,
-            command: [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                robot_cfg.default_base_height as f32,
-                0.0,
-                0.0,
-                0.0,
-            ],
+            command: LocomotionCommand::idle(&robot_cfg),
             num_obs: obs_cfg.num_obs,
         }
     }
@@ -43,6 +39,14 @@ impl RecoveryObservationBuilder {
     pub fn with_num_obs(mut self, num_obs: usize) -> Self {
         self.num_obs = num_obs;
         self
+    }
+
+    pub fn set_command(&mut self, command: LocomotionCommand) {
+        self.command = command;
+    }
+
+    pub fn policy_command(&self) -> [f32; 8] {
+        self.command.to_policy_command()
     }
 
     pub fn build(
@@ -58,7 +62,7 @@ impl RecoveryObservationBuilder {
                 pos: state.dof_pos(),
                 vel: state.dof_vel(),
             },
-            &self.command,
+            &self.policy_command(),
             last_action,
             self.default_dof_pos,
             PolicyObservationConfig {

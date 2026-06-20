@@ -15,14 +15,31 @@ import mujoco.viewer
 import numpy as np
 
 from .mujoco_runtime import MujocoRuntime, MujocoRuntimeConfig
-from .protocol import PolicyTargetFrame, pack_policy_state, unpack_policy_target
+from .protocol import (
+    MSG_COMMAND,
+    MSG_TARGET,
+    PolicyCommandFrame,
+    PolicyTargetFrame,
+    pack_policy_state,
+    unpack_policy_command,
+    unpack_policy_target,
+)
 from .rerun_viewer import RerunSimViewer, RerunSimViewerConfig
+
+TARGET_TIMEOUT_S = 0.10
 
 
 class SimViewer(Protocol):
     def is_running(self) -> bool: ...
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None: ...
+    def sync(
+        self,
+        *,
+        step: int,
+        command: PolicyCommandFrame,
+        target: PolicyTargetFrame,
+        ctrl: np.ndarray,
+    ) -> None: ...
 
 
 @dataclass(slots=True)
@@ -52,6 +69,7 @@ class SimLoopRuntime:
             )
         )
         self.latest_target = PolicyTargetFrame(0, (0.0, 0.0, 0.0, 0.0), (0.0, 0.0))
+        self.latest_command = PolicyCommandFrame(0, (0.0, 0.0, 0.0, 0.0, 0.22, 0.0, 0.0, 0.0))
         self.latest_target_time = time.monotonic()
         self._peer_path: str | None = None
         self._lock = threading.Lock()
@@ -73,22 +91,28 @@ class SimLoopRuntime:
                     if self.cfg.max_steps > 0 and steps >= self.cfg.max_steps:
                         break
                     with self._lock:
+                        command = self.latest_command
                         target = self.latest_target
                         target_time = self.latest_target_time
                         peer_path = self._peer_path
-                    ctrl = self.mj.apply_target(
-                        np.asarray(target.joint_pos, dtype=np.float64),
-                        np.asarray(target.wheel_vel, dtype=np.float64),
-                    )
+                    target_age_s = max(0.0, time.monotonic() - target_time)
+                    target_valid = target.seq != 0 and target_age_s <= TARGET_TIMEOUT_S
+                    if target_valid:
+                        ctrl = self.mj.apply_target(
+                            np.asarray(target.joint_pos, dtype=np.float64),
+                            np.asarray(target.wheel_vel, dtype=np.float64),
+                        )
+                    else:
+                        ctrl = self.mj.disable_actuators()
                     self.mj.step()
-                    viewer.sync(step=steps, ctrl=ctrl)
+                    viewer.sync(step=steps, command=command, target=target, ctrl=ctrl)
                     if peer_path is not None:
                         state = self.mj.state_frame(
                             seq=steps & 0xFFFFFFFF,
                             tick_ms=int(self.mj.data.time * 1000.0) & 0xFFFFFFFF,
                             target=target,
-                            target_age_ms=int(max(0.0, time.monotonic() - target_time) * 1000.0),
-                            target_valid=target.seq != 0,
+                            target_age_ms=int(target_age_s * 1000.0),
+                            target_valid=target_valid,
                             ctrl=ctrl,
                         )
                         try:
@@ -160,15 +184,26 @@ class SimLoopRuntime:
             except OSError:
                 break
             try:
-                target = unpack_policy_target(data)
+                msg_type = data[2] if len(data) >= 3 else None
+                if msg_type == MSG_TARGET:
+                    target = unpack_policy_target(data)
+                    with self._lock:
+                        self.latest_target = target
+                        self.latest_target_time = time.monotonic()
+                        if isinstance(peer_path, str) and peer_path:
+                            self._peer_path = peer_path
+                    continue
+                if msg_type == MSG_COMMAND:
+                    command = unpack_policy_command(data)
+                    with self._lock:
+                        self.latest_command = command
+                        if isinstance(peer_path, str) and peer_path:
+                            self._peer_path = peer_path
+                    continue
+                raise ValueError(f"unexpected message type {msg_type}")
             except ValueError as exc:
                 print(f"drop packet: {exc}")
                 continue
-            with self._lock:
-                self.latest_target = target
-                self.latest_target_time = time.monotonic()
-                if isinstance(peer_path, str) and peer_path:
-                    self._peer_path = peer_path
 
 
 def _unlink_socket_path(path: Path, *, require_socket: bool) -> None:
@@ -184,7 +219,14 @@ class NullSimViewer:
     def is_running(self) -> bool:
         return True
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+    def sync(
+        self,
+        *,
+        step: int,
+        command: PolicyCommandFrame,
+        target: PolicyTargetFrame,
+        ctrl: np.ndarray,
+    ) -> None:
         return
 
 
@@ -195,7 +237,14 @@ class MujocoSimViewer:
     def is_running(self) -> bool:
         return bool(self._viewer.is_running())
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
+    def sync(
+        self,
+        *,
+        step: int,
+        command: PolicyCommandFrame,
+        target: PolicyTargetFrame,
+        ctrl: np.ndarray,
+    ) -> None:
         self._viewer.sync()
 
 
@@ -208,5 +257,19 @@ class RerunRuntimeViewer:
     def is_running(self) -> bool:
         return True
 
-    def sync(self, *, step: int, ctrl: np.ndarray) -> None:
-        self._viewer.log_state(self._model, self._data, step=step, ctrl=ctrl)
+    def sync(
+        self,
+        *,
+        step: int,
+        command: PolicyCommandFrame,
+        target: PolicyTargetFrame,
+        ctrl: np.ndarray,
+    ) -> None:
+        self._viewer.log_state(
+            self._model,
+            self._data,
+            step=step,
+            command=command,
+            target=target,
+            ctrl=ctrl,
+        )

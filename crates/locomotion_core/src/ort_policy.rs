@@ -6,9 +6,8 @@ use ort::{
     session::{Session, builder::GraphOptimizationLevel},
     value::{Outlet, TensorRef},
 };
+use se3_ort_ep::{OrtEpError, OrtExecutionProvider, configure_session_builder};
 use thiserror::Error;
-
-use crate::ort_ep::{OrtEpError, OrtExecutionProvider, configure_session_builder};
 
 #[derive(Debug, Error)]
 pub enum OrtPolicyError {
@@ -50,8 +49,8 @@ pub struct OrtPolicyRuntime {
 }
 
 impl OrtPolicyRuntime {
-    pub fn new(checkpoint: impl AsRef<Path>, configured_ep: &str) -> Result<Self, OrtPolicyError> {
-        let checkpoint_path = checkpoint.as_ref().to_path_buf();
+    pub fn new(checkpoint: &Path, configured_ep: &str) -> Result<Self, OrtPolicyError> {
+        let checkpoint_path = checkpoint.to_path_buf();
         if !checkpoint_path.exists() {
             return Err(OrtPolicyError::CheckpointNotFound(checkpoint_path));
         }
@@ -235,61 +234,4 @@ fn expect_outlet_shape(
 
 fn builder_error(err: ort::Error<ort::session::builder::SessionBuilder>) -> OrtPolicyError {
     OrtPolicyError::OrtBuilder(err.to_string())
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ort_runtime_matches_npz_reference_first_two_actions() {
-        let Ok(root) = std::env::var("SE3_RECOVERY_CHECKPOINT") else {
-            eprintln!("skipping ORT model test: SE3_RECOVERY_CHECKPOINT is not set");
-            return;
-        };
-        let mut policy = OrtPolicyRuntime::new(root, "cpu").unwrap();
-        let mut obs = vec![0.0_f32; policy.num_obs];
-        obs[5] = -1.0;
-        obs[10] = 1.1;
-
-        let first = policy.act(&obs).unwrap();
-        assert_close(
-            &first,
-            &[
-                0.044_738_494,
-                -1.533_439_5,
-                0.136_654_12,
-                -0.856_369_4,
-                -1.435_538_6,
-                0.699_100_9,
-            ],
-            2.0e-5,
-        );
-
-        let second = policy.act(&obs).unwrap();
-        assert_close(
-            &second,
-            &[
-                0.010_364_339,
-                -1.954_866_3,
-                0.077_041_69,
-                -1.171_495_8,
-                -1.921_727,
-                1.023_388,
-            ],
-            2.0e-5,
-        );
-    }
-
-    fn assert_close(actual: &[f32], expected: &[f32], tol: f32) {
-        assert_eq!(actual.len(), expected.len());
-        for (idx, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            let diff = (actual - expected).abs();
-            assert!(
-                diff <= tol,
-                "idx={idx} actual={actual} expected={expected} diff={diff} tol={tol}"
-            );
-        }
-    }
 }

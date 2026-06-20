@@ -20,6 +20,7 @@ nalgebra.workspace = true
 ndarray.workspace = true
 ort.workspace = true
 rerun.workspace = true
+se3_ort_ep.workspace = true
 serde.workspace = true
 strum.workspace = true
 thiserror.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "se3_input"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gilrs.workspace = true
+thiserror.workspace = true

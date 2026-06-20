@@ -2,11 +2,11 @@
 
 pub mod action_delay;
 pub mod cdc;
+pub mod command;
 pub mod fourbar;
 pub mod height_default;
 pub mod motor;
 pub mod observation_config;
-pub mod ort_ep;
 pub mod ort_policy;
 pub mod policy_io;
 pub mod protocol;
@@ -17,6 +17,7 @@ pub mod robot;
 pub mod visualize_cdc_state;
 
 pub use action_delay::{ActionDelayConfig, DelayResampleMode, delay_seconds_to_steps};
+pub use command::LocomotionCommand;
 pub use fourbar::{
     FOURBAR_SURROGATE_MARKER, active_angle_from_output_knee, is_fourbar_surrogate_name_set,
     output_knee_from_active_angle, output_knee_jacobian, output_to_policy_pos,

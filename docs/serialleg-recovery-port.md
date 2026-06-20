@@ -2,7 +2,7 @@
 
 这个目录是 `Serialleg_deploy_python` 的 Rust 版移植。
 
-Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 手写 NPZ 推理路径。默认执行器为 `--ort-ep auto`，可显式传 `cpu`、`coreml`、`openvino` 或 `tensorrt`。
+Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 手写 NPZ 推理路径。默认执行器为 `--ort-ep auto`。
 
 ## 架构分层
 
@@ -36,7 +36,7 @@ Recovery 策略网络推理使用 Rust `ort-rs` 加载 ONNX，不再使用 Rust 
 - Runtime entry: `./scripts/run_recovery.sh`
 - Policy artifact: 外部 ONNX 文件，通过 `SE3_RECOVERY_CHECKPOINT=/path/to/model.onnx` 或 `--checkpoint /path/to/model.onnx` 指定。
 - Policy runtime: Rust `ort-rs` / ONNX Runtime
-- Runtime EP: `SE3_ORT_EP=auto|cpu|coreml|openvino|tensorrt`
+- Runtime EP: `SE3_ORT_EP=auto`
 - Local sim entry: `uv run se3-sim-loop --model <MJCF>`
 - Local sim transport: Unix datagram，默认 sim socket 为 `/tmp/se3_sim_loop.sock`，locomotion client socket 为 `/tmp/se3_locomotion.sock`
 - Time sync helper: `scripts/fix_time_and_pull.sh`

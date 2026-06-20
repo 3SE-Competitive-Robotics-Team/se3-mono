@@ -4,22 +4,34 @@ import argparse
 from pathlib import Path
 
 from .runtime import SimLoopConfig, SimLoopRuntime
+from .zoo import DEFAULT_ROBOT_ID, get_robot, list_robots
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run SE3 MuJoCo sim loop")
     parser.add_argument(
+        "--robot",
+        choices=[profile.id for profile in list_robots()],
+        default=DEFAULT_ROBOT_ID,
+        help="Robot profile id",
+    )
+    parser.add_argument(
         "--model",
         type=Path,
-        required=True,
-        help="MJCF model file path",
+        default=None,
+        help="MJCF model file path; defaults to the selected robot profile",
     )
-    parser.add_argument("--socket-path", type=Path, default=Path("/tmp/se3_sim_loop.sock"))
+    parser.add_argument(
+        "--socket-path",
+        type=Path,
+        default=None,
+        help="Override the selected robot profile socket path",
+    )
     parser.add_argument("--max-steps", type=int, default=0)
-    parser.add_argument("--rate-hz", type=float, default=500.0)
-    parser.add_argument("--kp", type=float, default=40.0)
-    parser.add_argument("--kd", type=float, default=2.0)
-    parser.add_argument("--wheel-kd", type=float, default=0.5)
+    parser.add_argument("--rate-hz", type=float, default=None, help="Override profile sim rate")
+    parser.add_argument("--kp", type=float, default=None, help="Override profile leg kp")
+    parser.add_argument("--kd", type=float, default=None, help="Override profile leg kd")
+    parser.add_argument("--wheel-kd", type=float, default=None, help="Override profile wheel kd")
     parser.add_argument(
         "--viewer",
         choices=["none", "rerun", "mujoco"],
@@ -32,23 +44,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_config(args: argparse.Namespace) -> SimLoopConfig:
+    profile = get_robot(args.robot).sim
+    return SimLoopConfig(
+        model_path=args.model if args.model is not None else profile.model_path,
+        socket_path=args.socket_path if args.socket_path is not None else profile.socket_path,
+        max_steps=args.max_steps,
+        rate_hz=args.rate_hz if args.rate_hz is not None else profile.rate_hz,
+        leg_kp=args.kp if args.kp is not None else profile.leg_kp,
+        leg_kd=args.kd if args.kd is not None else profile.leg_kd,
+        wheel_kd=args.wheel_kd if args.wheel_kd is not None else profile.wheel_kd,
+        viewer=args.viewer,
+        rerun_address=args.rerun_address,
+        rerun_save=args.rerun_save,
+        rerun_memory_limit=args.rerun_memory_limit,
+    )
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    runtime = SimLoopRuntime(
-        SimLoopConfig(
-            model_path=args.model,
-            socket_path=args.socket_path,
-            max_steps=args.max_steps,
-            rate_hz=args.rate_hz,
-            leg_kp=args.kp,
-            leg_kd=args.kd,
-            wheel_kd=args.wheel_kd,
-            viewer=args.viewer,
-            rerun_address=args.rerun_address,
-            rerun_save=args.rerun_save,
-            rerun_memory_limit=args.rerun_memory_limit,
-        )
-    )
+    runtime = SimLoopRuntime(build_config(args))
     runtime.run()
     return 0
 

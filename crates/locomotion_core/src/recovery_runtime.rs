@@ -10,14 +10,17 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::fourbar::{output_to_policy_pos, output_to_policy_vel, policy_to_output_pos};
 use crate::policy_io::{PolicyActionDecoderConfig, PolicyIoError};
 use crate::{ObservationConfig, PolicyActionDecoder, RobotConfig};
+use se3_command::{Command, CommandSourceKind};
 
 use crate::cdc::{CdcError, CdcSerial, cdc_port_disappeared, resolve_cdc_port};
+use crate::command::LocomotionCommand;
 use crate::ort_policy::{OrtPolicyError, OrtPolicyRuntime};
 use crate::protocol::{
-    MSG_POLICY_STATE, PolicyStateFrame, PolicyTargetFrame, ProtocolError, StreamParser,
-    decode_policy_state, pack_policy_target,
+    MSG_POLICY_STATE, PolicyCommandFrame, PolicyStateFrame, PolicyTargetFrame, ProtocolError,
+    StreamParser, decode_policy_state, pack_policy_command, pack_policy_target,
 };
 use crate::recovery_observation::{RecoveryObservationBuilder, synthetic_recovery_state};
 
@@ -28,6 +31,7 @@ pub const ACTION_FLAG_DRY_RUN: u32 = 1 << 0;
 pub const ACTION_FLAG_TIMEOUT: u32 = 1 << 1;
 pub const ACTION_FLAG_NONFINITE: u32 = 1 << 2;
 pub const ACTION_FLAG_OUTPUT_DISABLED_HOLD: u32 = 1 << 3;
+pub const ACTION_FLAG_COMMAND_INACTIVE: u32 = 1 << 4;
 
 #[derive(Debug, Error)]
 pub enum RecoveryRuntimeError {
@@ -72,6 +76,9 @@ pub enum RecoveryTransport {
 pub struct RecoveryRuntimeConfig {
     pub checkpoint: PathBuf,
     pub ort_ep: String,
+    pub command_source: CommandSourceKind,
+    pub fixed_command: Command,
+    pub robot_cfg: RobotConfig,
     pub transport: RecoveryTransport,
     pub port: String,
     pub sim_socket_path: PathBuf,
@@ -94,12 +101,15 @@ impl Default for RecoveryRuntimeConfig {
         Self {
             checkpoint: PathBuf::new(),
             ort_ep: "auto".to_string(),
+            command_source: CommandSourceKind::Fixed,
+            fixed_command: Command::idle(RobotConfig::default().default_base_height as f32),
+            robot_cfg: RobotConfig::default(),
             transport: RecoveryTransport::Cdc,
             port: DEFAULT_CDC_PORT.to_string(),
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
             baudrate: 921600,
-            device: "cpu".to_string(),
+            device: "auto".to_string(),
             rate_hz: 50.0,
             state_timeout_s: 0.10,
             write_timeout_s: 0.02,
@@ -224,6 +234,7 @@ pub struct RecoveryRuntime {
     reset_id: usize,
     reconnect_count: usize,
     resolved_port: Option<String>,
+    sim_fourbar_surrogate: bool,
     last_sample_monotonic: Option<Instant>,
     last_policy_reset_reason: String,
     checkpoint_sha256: Option<String>,
@@ -231,15 +242,31 @@ pub struct RecoveryRuntime {
     last_print_monotonic: Instant,
     last_print_steps: usize,
     telemetry: TelemetryLogger,
+    command_source: Box<dyn RuntimeCommandSource>,
+    last_command_sample: RuntimeCommandSample,
 }
 
 impl RecoveryRuntime {
     pub fn new(cfg: RecoveryRuntimeConfig) -> Result<Self, RecoveryRuntimeError> {
+        let command_source = Box::new(FixedRuntimeCommandSource::new(cfg.fixed_command));
+        Self::new_with_command_source(cfg, command_source)
+    }
+
+    pub fn new_with_command_source(
+        cfg: RecoveryRuntimeConfig,
+        command_source: Box<dyn RuntimeCommandSource>,
+    ) -> Result<Self, RecoveryRuntimeError> {
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
-        let obs_builder = RecoveryObservationBuilder::new().with_num_obs(policy.num_obs());
-        let target_decoder = RecoveryActionTargetDecoder::new(obs_builder.command[4], None);
+        let initial_command = LocomotionCommand::from_command(cfg.fixed_command, &cfg.robot_cfg);
+        let mut obs_builder = RecoveryObservationBuilder::with_robot_config(cfg.robot_cfg.clone())
+            .with_num_obs(policy.num_obs());
+        obs_builder.set_command(initial_command);
+        let target_decoder = RecoveryActionTargetDecoder::new(
+            obs_builder.policy_command()[4],
+            Some(cfg.robot_cfg.clone()),
+        );
         let now = Instant::now();
         let session_id = format!("{}_{}", unix_time_s() as u64, std::process::id());
         let checkpoint_sha256 = sha256_file(&cfg.checkpoint)?;
@@ -276,13 +303,15 @@ impl RecoveryRuntime {
                 "num_obs": obs_cfg.num_obs,
                 "num_actions": obs_cfg.num_actions,
             },
-            "command": obs_builder.command,
+            "command": obs_builder.policy_command(),
+            "command_source": cfg.command_source.as_str(),
             "action_decoder": {
                 "height_conditioned_action_default": true,
                 "active_rod_semantics": true,
                 "command_height": target_decoder.command_height,
             }
         }))?;
+        let last_command_sample = RuntimeCommandSample::fixed(cfg.fixed_command);
         let mut runtime = Self {
             cfg,
             obs_cfg,
@@ -297,6 +326,7 @@ impl RecoveryRuntime {
             reset_id: 0,
             reconnect_count: 0,
             resolved_port: None,
+            sim_fourbar_surrogate: false,
             last_sample_monotonic: None,
             last_policy_reset_reason: "startup".to_string(),
             checkpoint_sha256,
@@ -304,6 +334,8 @@ impl RecoveryRuntime {
             last_print_monotonic: now,
             last_print_steps: 0,
             telemetry,
+            command_source,
+            last_command_sample,
         };
         runtime.write_event("runtime_start", json!({}))?;
         Ok(runtime)
@@ -339,17 +371,34 @@ impl RecoveryRuntime {
             let loop_started = Instant::now();
             let state = synthetic_recovery_state(step as u32);
             self.stats.state_frames += 1;
-            let (action, mut flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
-            flags |= ACTION_FLAG_DRY_RUN;
-            self.decode_target(action)?;
-            self.record_action(&state, action, flags, Some(policy_inference_ms));
+            self.sample_command();
+            let (action, flags, obs, policy_inference_ms) = if self.last_command_sample.active {
+                let (action, flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
+                self.decode_target(action)?;
+                (
+                    action,
+                    flags | ACTION_FLAG_DRY_RUN,
+                    obs,
+                    Some(policy_inference_ms),
+                )
+            } else {
+                self.reset_policy_memory(false, "command_inactive")?;
+                let (obs, obs_flags) = self.build_observation(&state)?;
+                (
+                    [0.0; 6],
+                    obs_flags | ACTION_FLAG_DRY_RUN | ACTION_FLAG_COMMAND_INACTIVE,
+                    obs,
+                    None,
+                )
+            };
+            self.record_action(&state, action, flags, policy_inference_ms);
             self.write_telemetry(
                 &state,
                 &obs,
                 &action,
                 flags,
                 TelemetryTiming {
-                    policy_inference_ms: Some(policy_inference_ms),
+                    policy_inference_ms,
                     state_age_s: Some(0.0),
                     loop_started,
                     write_ms: None,
@@ -362,6 +411,8 @@ impl RecoveryRuntime {
 
     fn run_sim(&mut self) -> Result<(), RecoveryRuntimeError> {
         let max_steps = self.cfg.max_steps;
+        let period_s = 1.0 / self.cfg.rate_hz;
+        self.sim_fourbar_surrogate = true;
         let state_timeout =
             Duration::try_from_secs_f64(self.cfg.state_timeout_s).map_err(|err| {
                 std::io::Error::new(
@@ -405,44 +456,42 @@ impl RecoveryRuntime {
         socket.send(&handshake)?;
         let mut parser = StreamParser::default();
         let mut buf = [0_u8; 4096];
+        let mut latest_state: Option<PolicyStateFrame> = None;
+        let mut latest_state_time = Instant::now();
+        let mut next_tick = Instant::now() + Duration::from_secs_f64(period_s);
         while max_steps == 0 || self.stats.steps < max_steps {
             let loop_started = Instant::now();
-            let n = match socket.recv(&mut buf) {
-                Ok(n) => n,
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
+            let now = Instant::now();
+            if now >= next_tick {
+                next_tick += Duration::from_secs_f64(period_s);
+                let Some(state) = latest_state.as_ref() else {
                     self.stats.steps += 1;
                     self.stats.timeout_frames += 1;
                     self.maybe_print();
                     continue;
-                }
-                Err(err) => return Err(err.into()),
-            };
-            for message in parser.feed(&buf[..n]) {
-                if message.msg_type != MSG_POLICY_STATE {
-                    continue;
-                }
-                let state = decode_policy_state(&message)?;
-                self.stats.state_frames += 1;
-                self.stats.last_state_seq = state.seq;
-                let age_s = 0.0;
+                };
+                let age_s = now
+                    .saturating_duration_since(latest_state_time)
+                    .as_secs_f64();
                 let StepOutput {
                     action,
                     flags,
                     obs,
                     policy_inference_ms,
                     packet,
-                } = self.step_from_state(&state, age_s)?;
+                    command_packet,
+                } = self.step_from_state(state, age_s)?;
                 let write_started = Instant::now();
-                socket.send(&packet)?;
+                if let Some(command_packet) = command_packet {
+                    socket.send(&command_packet)?;
+                }
+                if let Some(packet) = packet {
+                    socket.send(&packet)?;
+                }
                 let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
-                self.record_action(&state, action, flags, policy_inference_ms);
+                self.record_action(state, action, flags, policy_inference_ms);
                 self.write_telemetry(
-                    &state,
+                    state,
                     &obs,
                     &action,
                     flags,
@@ -454,18 +503,60 @@ impl RecoveryRuntime {
                     },
                 )?;
                 self.maybe_print();
-                if max_steps != 0 && self.stats.steps >= max_steps {
-                    break;
+                continue;
+            }
+            let wait_s = (next_tick.saturating_duration_since(now).as_secs_f64())
+                .min(period_s)
+                .max(0.0);
+            socket.set_read_timeout(Some(Duration::from_secs_f64(wait_s)))?;
+            let n = match socket.recv(&mut buf) {
+                Ok(n) => n,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    0
                 }
+                Err(err) => return Err(err.into()),
+            };
+            if n > 0 {
+                (latest_state, latest_state_time) =
+                    self.read_sim_states(&mut parser, &buf[..n], latest_state, latest_state_time)?;
             }
         }
         client_socket_guard.cleanup()?;
         Ok(())
     }
 
+    fn read_sim_states(
+        &mut self,
+        parser: &mut StreamParser,
+        data: &[u8],
+        mut latest_state: Option<PolicyStateFrame>,
+        mut latest_state_time: Instant,
+    ) -> Result<(Option<PolicyStateFrame>, Instant), RecoveryRuntimeError> {
+        for message in parser.feed(data) {
+            if message.msg_type != MSG_POLICY_STATE {
+                continue;
+            }
+            let mut state = decode_policy_state(&message)?;
+            if self.sim_fourbar_surrogate {
+                state = sim_output_state_to_policy_state(state);
+            }
+            latest_state_time = Instant::now();
+            self.stats.state_frames += 1;
+            self.stats.last_state_seq = state.seq;
+            latest_state = Some(state);
+        }
+        Ok((latest_state, latest_state_time))
+    }
+
     fn run_cdc(&mut self) -> Result<(), RecoveryRuntimeError> {
         let max_steps = self.cfg.max_steps;
         let period_s = 1.0 / self.cfg.rate_hz;
+        self.sim_fourbar_surrogate = false;
 
         while max_steps == 0 || self.stats.steps < max_steps {
             self.reset_policy_memory(true, "cdc_connect")?;
@@ -524,9 +615,12 @@ impl RecoveryRuntime {
                         obs,
                         policy_inference_ms,
                         packet,
+                        command_packet: _,
                     } = self.step_from_state(state, age_s)?;
                     let write_started = Instant::now();
-                    serial.write_all(&packet, self.cfg.write_timeout_s)?;
+                    if let Some(packet) = packet {
+                        serial.write_all(&packet, self.cfg.write_timeout_s)?;
+                    }
                     let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                     self.record_action(state, action, flags, policy_inference_ms);
                     self.write_telemetry(
@@ -621,7 +715,21 @@ impl RecoveryRuntime {
         let obs;
         let action;
         let packet;
-        if age_s > self.cfg.state_timeout_s {
+        let command_packet;
+        self.sample_command();
+        if !self.last_command_sample.active {
+            self.reset_policy_memory(false, "command_inactive")?;
+            let (built_obs, obs_flags) = self.build_observation(state)?;
+            obs = built_obs;
+            action = [0.0; 6];
+            flags |= obs_flags | ACTION_FLAG_COMMAND_INACTIVE;
+            if obs_flags & ACTION_FLAG_NONFINITE != 0 {
+                self.stats.nonfinite_frames += 1;
+            }
+            policy_inference_ms = None;
+            packet = None;
+            command_packet = None;
+        } else if age_s > self.cfg.state_timeout_s {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
             flags |= ACTION_FLAG_TIMEOUT;
@@ -632,7 +740,8 @@ impl RecoveryRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = self.make_hold_target_packet(state)?;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else if state.output_enabled == 0 {
             self.reset_policy_memory(false, "output_disabled")?;
             let (built_obs, obs_flags) = self.build_observation(state)?;
@@ -643,14 +752,16 @@ impl RecoveryRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = self.make_hold_target_packet(state)?;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else {
             let result = self.act_from_state(state)?;
             action = result.0;
             flags = result.1;
             obs = result.2;
             policy_inference_ms = Some(result.3);
-            packet = self.make_target_packet(action)?;
+            packet = Some(self.make_target_packet(action)?);
+            command_packet = Some(self.make_command_packet()?);
         }
         Ok(StepOutput {
             action,
@@ -658,7 +769,17 @@ impl RecoveryRuntime {
             obs,
             policy_inference_ms,
             packet,
+            command_packet,
         })
+    }
+
+    fn sample_command(&mut self) {
+        let sample = self.command_source.sample();
+        let command =
+            LocomotionCommand::from_command(sample.command, &self.target_decoder.robot_cfg);
+        self.target_decoder.command_height = command.chassis.height_m;
+        self.obs_builder.set_command(command);
+        self.last_command_sample = sample;
     }
 
     fn act_from_state(
@@ -726,9 +847,10 @@ impl RecoveryRuntime {
 
     fn make_target_packet(&mut self, action: [f32; 6]) -> Result<Vec<u8>, RecoveryRuntimeError> {
         let target = self.decode_target(action)?;
+        let joint_pos = self.target_joint_pos_for_transport(target.joint_pos);
         let frame = PolicyTargetFrame {
             seq: self.action_seq,
-            joint_pos: target.joint_pos,
+            joint_pos,
             wheel_vel: target.wheel_vel,
         };
         self.action_seq = self.action_seq.wrapping_add(1);
@@ -743,13 +865,30 @@ impl RecoveryRuntime {
         let wheel_vel = [0.0, 0.0];
         self.stats.last_target_joint_pos = joint_pos;
         self.stats.last_target_wheel_vel = wheel_vel;
+        let transport_joint_pos = self.target_joint_pos_for_transport(joint_pos);
         let frame = PolicyTargetFrame {
             seq: self.action_seq,
-            joint_pos,
+            joint_pos: transport_joint_pos,
             wheel_vel,
         };
         self.action_seq = self.action_seq.wrapping_add(1);
         Ok(pack_policy_target(&frame)?)
+    }
+
+    fn make_command_packet(&self) -> Result<Vec<u8>, RecoveryRuntimeError> {
+        let frame = PolicyCommandFrame {
+            seq: self.action_seq.wrapping_sub(1),
+            command: self.obs_builder.policy_command(),
+        };
+        Ok(pack_policy_command(&frame)?)
+    }
+
+    fn target_joint_pos_for_transport(&self, policy_joint_pos: [f32; 4]) -> [f32; 4] {
+        if self.sim_fourbar_surrogate {
+            policy_to_output_pos(policy_joint_pos.map(|v| v as f64)).map(|v| v as f32)
+        } else {
+            policy_joint_pos
+        }
     }
 
     fn decode_target(
@@ -860,21 +999,31 @@ impl RecoveryRuntime {
             "policy_inference_frames".to_string(),
             json!(self.stats.policy_inference_frames),
         );
-        record.insert(
-            "target_mode".to_string(),
-            json!(
-                if flags & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT) != 0 {
-                    "hold_current"
-                } else {
-                    "policy"
-                }
-            ),
-        );
+        record.insert("target_mode".to_string(), json!(target_mode_name(flags)));
         record.insert(
             "last_policy_reset_reason".to_string(),
             json!(self.last_policy_reset_reason),
         );
-        record.insert("command".to_string(), json!(self.obs_builder.command));
+        record.insert(
+            "command".to_string(),
+            json!(self.obs_builder.policy_command()),
+        );
+        record.insert(
+            "command_source".to_string(),
+            json!(self.last_command_sample.source.as_str()),
+        );
+        record.insert(
+            "command_active".to_string(),
+            json!(self.last_command_sample.active),
+        );
+        record.insert(
+            "command_device_id".to_string(),
+            json!(self.last_command_sample.device_id),
+        );
+        record.insert(
+            "command_device_name".to_string(),
+            json!(self.last_command_sample.device_name),
+        );
         record.insert(
             "checkpoint_sha256".to_string(),
             json!(self.checkpoint_sha256),
@@ -983,14 +1132,7 @@ impl RecoveryRuntime {
         } else {
             flag_names.join(",")
         };
-        let target_mode = if self.stats.last_action_flags
-            & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT)
-            != 0
-        {
-            "hold_current"
-        } else {
-            "policy"
-        };
+        let target_mode = target_mode_name(self.stats.last_action_flags);
         eprintln!(
             "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
             self.stats.steps,
@@ -1027,9 +1169,9 @@ pub fn load_policy_runtime(
     ort_ep: &str,
 ) -> Result<LoadedPolicy, RecoveryRuntimeError> {
     match checkpoint.extension().and_then(|value| value.to_str()) {
-        Some("onnx") => Ok(LoadedPolicy::Ort(OrtPolicyRuntime::new(
+        Some("onnx") => Ok(LoadedPolicy::Ort(Box::new(OrtPolicyRuntime::new(
             checkpoint, ort_ep,
-        )?)),
+        )?))),
         _ => Err(RecoveryRuntimeError::UnsupportedCheckpoint(
             checkpoint.to_path_buf(),
         )),
@@ -1048,77 +1190,102 @@ struct StepOutput {
     flags: u32,
     obs: Vec<f32>,
     policy_inference_ms: Option<f64>,
-    packet: Vec<u8>,
+    packet: Option<Vec<u8>>,
+    command_packet: Option<Vec<u8>>,
 }
 
 pub enum LoadedPolicy {
-    Ort(OrtPolicyRuntime),
+    Ort(Box<OrtPolicyRuntime>),
+    #[cfg(test)]
+    Noop,
 }
 
 impl LoadedPolicy {
     fn reset(&mut self) {
         match self {
             Self::Ort(policy) => policy.reset(),
+            #[cfg(test)]
+            Self::Noop => {}
         }
     }
 
     fn act(&mut self, obs: &[f32]) -> Result<Vec<f32>, RecoveryRuntimeError> {
         match self {
             Self::Ort(policy) => Ok(policy.act(obs)?),
+            #[cfg(test)]
+            Self::Noop => Ok(vec![0.0; 6]),
         }
     }
 
     fn iteration(&self) -> &str {
         match self {
             Self::Ort(policy) => &policy.iteration,
+            #[cfg(test)]
+            Self::Noop => "test",
         }
     }
 
     fn policy_type(&self) -> String {
         match self {
             Self::Ort(policy) => policy.policy_type(),
+            #[cfg(test)]
+            Self::Noop => "test".to_string(),
         }
     }
 
     fn num_obs(&self) -> usize {
         match self {
             Self::Ort(policy) => policy.num_obs,
+            #[cfg(test)]
+            Self::Noop => ObservationConfig::default().num_obs,
         }
     }
 
     fn num_actions(&self) -> usize {
         match self {
             Self::Ort(policy) => policy.num_actions,
+            #[cfg(test)]
+            Self::Noop => ObservationConfig::default().num_actions,
         }
     }
 
     fn rnn_type(&self) -> &str {
         match self {
             Self::Ort(policy) => &policy.rnn_type,
+            #[cfg(test)]
+            Self::Noop => "none",
         }
     }
 
     fn rnn_hidden_dim(&self) -> usize {
         match self {
             Self::Ort(policy) => policy.rnn_hidden_dim,
+            #[cfg(test)]
+            Self::Noop => 0,
         }
     }
 
     fn rnn_num_layers(&self) -> usize {
         match self {
             Self::Ort(policy) => policy.rnn_num_layers,
+            #[cfg(test)]
+            Self::Noop => 0,
         }
     }
 
     fn activation(&self) -> &str {
         match self {
             Self::Ort(policy) => &policy.activation,
+            #[cfg(test)]
+            Self::Noop => "none",
         }
     }
 
     fn execution_provider(&self) -> &'static str {
         match self {
             Self::Ort(policy) => policy.execution_provider.as_str(),
+            #[cfg(test)]
+            Self::Noop => "test",
         }
     }
 }
@@ -1307,6 +1474,9 @@ fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
     json!({
         "checkpoint": cfg.checkpoint,
         "ort_ep": cfg.ort_ep,
+        "command_source": cfg.command_source.as_str(),
+        "fixed_command": cfg.fixed_command.chassis.map(|command| command.to_policy_command()),
+        "robot_default_base_height": cfg.robot_cfg.default_base_height,
         "transport": match cfg.transport {
             RecoveryTransport::Cdc => "cdc",
             RecoveryTransport::Sim => "sim",
@@ -1326,6 +1496,16 @@ fn runtime_config_json(cfg: &RecoveryRuntimeConfig) -> serde_json::Value {
         "telemetry_log_every": cfg.telemetry_log_every,
         "telemetry_flush_every": cfg.telemetry_flush_every,
     })
+}
+
+fn sim_output_state_to_policy_state(mut state: PolicyStateFrame) -> PolicyStateFrame {
+    let output_pos = state.joint_pos.map(|value| value as f64);
+    let output_vel = state.joint_vel.map(|value| value as f64);
+    let output_target = state.target_joint_pos.map(|value| value as f64);
+    state.joint_pos = output_to_policy_pos(output_pos).map(|value| value as f32);
+    state.joint_vel = output_to_policy_vel(output_pos, output_vel).map(|value| value as f32);
+    state.target_joint_pos = output_to_policy_pos(output_target).map(|value| value as f32);
+    state
 }
 
 fn unix_time_s() -> f64 {
@@ -1365,7 +1545,72 @@ fn action_flag_names(flags: u32) -> Vec<&'static str> {
     if flags & ACTION_FLAG_OUTPUT_DISABLED_HOLD != 0 {
         names.push("output_disabled_hold");
     }
+    if flags & ACTION_FLAG_COMMAND_INACTIVE != 0 {
+        names.push("command_inactive");
+    }
     names
+}
+
+fn target_mode_name(flags: u32) -> &'static str {
+    if flags & ACTION_FLAG_COMMAND_INACTIVE != 0 {
+        "command_inactive"
+    } else if flags & (ACTION_FLAG_OUTPUT_DISABLED_HOLD | ACTION_FLAG_TIMEOUT) != 0 {
+        "hold_current"
+    } else {
+        "policy"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeCommandSample {
+    pub command: Command,
+    pub source: CommandSourceKind,
+    pub active: bool,
+    pub device_id: Option<usize>,
+    pub device_name: Option<String>,
+}
+
+impl RuntimeCommandSample {
+    pub fn fixed(command: Command) -> Self {
+        Self {
+            command,
+            source: CommandSourceKind::Fixed,
+            active: true,
+            device_id: None,
+            device_name: None,
+        }
+    }
+
+    pub fn xinput_idle(command: Command) -> Self {
+        Self {
+            command,
+            source: CommandSourceKind::XInput,
+            active: false,
+            device_id: None,
+            device_name: None,
+        }
+    }
+}
+
+pub trait RuntimeCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample;
+}
+
+#[derive(Debug)]
+pub struct FixedRuntimeCommandSource {
+    command: Command,
+}
+
+impl FixedRuntimeCommandSource {
+    pub fn new(command: Command) -> Self {
+        Self { command }
+    }
+}
+
+impl RuntimeCommandSource for FixedRuntimeCommandSource {
+    fn sample(&mut self) -> RuntimeCommandSample {
+        RuntimeCommandSample::fixed(self.command)
+    }
 }
 
 fn fmt_values(values: &[f32]) -> String {
@@ -1404,6 +1649,58 @@ mod tests {
     }
 
     #[test]
+    fn sim_output_state_is_converted_to_policy_state() {
+        let robot = RobotConfig::default();
+        let policy_pos = [
+            robot.default_dof_pos[0] as f32,
+            robot.default_dof_pos[1] as f32,
+            robot.default_dof_pos[2] as f32,
+            robot.default_dof_pos[3] as f32,
+        ];
+        let output_pos = policy_to_output_pos(policy_pos.map(|value| value as f64));
+        let mut state = synthetic_recovery_state(3);
+        state.joint_pos = output_pos.map(|value| value as f32);
+        state.joint_vel = [0.4, -0.7, -0.2, 0.3];
+        state.target_joint_pos = state.joint_pos;
+        let expected_vel =
+            output_to_policy_vel(output_pos, state.joint_vel.map(|value| value as f64))
+                .map(|value| value as f32);
+
+        let converted = sim_output_state_to_policy_state(state);
+
+        assert_close(&converted.joint_pos, &policy_pos, 3.0e-5);
+        assert_close(&converted.target_joint_pos, &policy_pos, 3.0e-5);
+        assert_close(&converted.joint_vel, &expected_vel, 3.0e-5);
+    }
+
+    #[test]
+    fn sim_transport_target_packet_uses_output_joint_coordinates() {
+        let mut runtime = test_runtime_without_policy();
+        runtime.sim_fourbar_surrogate = true;
+        let robot = RobotConfig::default();
+        let policy_pos = [
+            robot.default_dof_pos[0] as f32,
+            robot.default_dof_pos[1] as f32,
+            robot.default_dof_pos[2] as f32,
+            robot.default_dof_pos[3] as f32,
+        ];
+
+        let packet = runtime
+            .make_hold_target_packet(&PolicyStateFrame {
+                joint_pos: policy_pos,
+                ..synthetic_recovery_state(11)
+            })
+            .unwrap();
+        let messages = StreamParser::default().feed(&packet);
+        let target = crate::protocol::decode_policy_target(&messages[0]).unwrap();
+        let expected =
+            policy_to_output_pos(policy_pos.map(|value| value as f64)).map(|value| value as f32);
+
+        assert_close(&target.joint_pos, &expected, 3.0e-5);
+        assert_close(&runtime.stats.last_target_joint_pos, &policy_pos, 0.0);
+    }
+
+    #[test]
     fn unlink_socket_path_refuses_regular_file() {
         let path = std::env::temp_dir().join(format!(
             "se3_regular_{}_{}",
@@ -1415,6 +1712,42 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(path.exists());
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn test_runtime_without_policy() -> RecoveryRuntime {
+        let now = Instant::now();
+        RecoveryRuntime {
+            cfg: RecoveryRuntimeConfig::default(),
+            obs_cfg: ObservationConfig::default(),
+            policy: LoadedPolicy::Noop,
+            obs_builder: RecoveryObservationBuilder::new(),
+            target_decoder: RecoveryActionTargetDecoder::new(0.22, None),
+            stats: RuntimeStats::default(),
+            last_action: [0.0; 6],
+            action_seq: 0,
+            policy_memory_clean: true,
+            session_id: "test".to_string(),
+            reset_id: 0,
+            reconnect_count: 0,
+            resolved_port: None,
+            sim_fourbar_surrogate: false,
+            last_sample_monotonic: None,
+            last_policy_reset_reason: "test".to_string(),
+            checkpoint_sha256: None,
+            start_monotonic: now,
+            last_print_monotonic: now,
+            last_print_steps: 0,
+            telemetry: TelemetryLogger {
+                path: None,
+                meta_path: None,
+                every: 1,
+                flush_every: 1,
+                file: None,
+                written: 0,
+            },
+            command_source: Box::new(FixedRuntimeCommandSource::new(Command::idle(0.22))),
+            last_command_sample: RuntimeCommandSample::fixed(Command::idle(0.22)),
+        }
     }
 
     fn assert_close<const N: usize>(actual: &[f32; N], expected: &[f32; N], tol: f32) {
