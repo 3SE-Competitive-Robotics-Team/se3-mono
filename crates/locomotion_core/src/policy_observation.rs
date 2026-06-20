@@ -7,20 +7,20 @@ use crate::LocomotionCommand;
 use crate::protocol::PolicyStateFrame;
 
 #[derive(Debug, Clone)]
-pub struct RecoveryObservationBuilder {
+pub struct LocomotionObservationBuilder {
     pub default_dof_pos: [f32; 6],
     pub command_scale: [f32; 5],
     pub command: LocomotionCommand,
     pub num_obs: usize,
 }
 
-impl Default for RecoveryObservationBuilder {
+impl Default for LocomotionObservationBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RecoveryObservationBuilder {
+impl LocomotionObservationBuilder {
     pub fn new() -> Self {
         let robot_cfg = RobotConfig::default();
         Self::with_robot_config(robot_cfg)
@@ -77,7 +77,7 @@ impl RecoveryObservationBuilder {
     }
 }
 
-pub fn synthetic_recovery_state(seq: u32) -> PolicyStateFrame {
+pub fn synthetic_default_state(seq: u32) -> PolicyStateFrame {
     let robot_cfg = RobotConfig::default();
     let dof_pos = robot_cfg.default_dof_pos.map(|v| v as f32);
     PolicyStateFrame {
@@ -108,8 +108,8 @@ mod tests {
 
     #[test]
     fn synthetic_observation_matches_python_reference() {
-        let builder = RecoveryObservationBuilder::new();
-        let state = synthetic_recovery_state(7);
+        let builder = LocomotionObservationBuilder::new();
+        let state = synthetic_default_state(7);
         let result = builder.build(&state, [0.0; 6]).unwrap();
         assert!(!result.had_nonfinite_input);
         assert_eq!(
@@ -124,8 +124,8 @@ mod tests {
 
     #[test]
     fn synthetic_observation_can_match_legacy_obs32_checkpoint() {
-        let builder = RecoveryObservationBuilder::new().with_num_obs(32);
-        let state = synthetic_recovery_state(7);
+        let builder = LocomotionObservationBuilder::new().with_num_obs(32);
+        let state = synthetic_default_state(7);
         let result = builder.build(&state, [0.0; 6]).unwrap();
         assert!(!result.had_nonfinite_input);
         assert_eq!(
