@@ -6,10 +6,12 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `apps/auto_aim` | 自瞄进程入口，负责初始化配置、日志、ONNX Runtime session、队列和 Tokio task。 |
+| `apps/auto_aim` | 自瞄进程入口，负责初始化配置、共享日志、ONNX Runtime session、队列和 Tokio task。 |
 | `crates/auto_aim_core/src/rbt_base` | 几何、弹道、EKF、IPPE PnP、排序等基础算法。 |
-| `crates/auto_aim_core/src/rbt_infra` | 配置、错误、日志、ONNX Runtime EP 选择、异步 latest queue、Rerun 辅助。 |
+| `crates/auto_aim_core/src/rbt_infra` | 配置、错误、异步 latest queue 和 Rerun 辅助。 |
 | `crates/auto_aim_core/src/rbt_mod` | 装甲板识别与解算、能量机关、估计器、发控、通讯、运行时路由。 |
+| `crates/se3_log` | 共享日志初始化，`auto_aim` 和 `locomotion` 共用。 |
+| `crates/se3_ort_ep` | ONNX Runtime execution provider 选择策略，供自瞄和 locomotion 共用。 |
 | `cfg/rbt_cfg.toml` | 自瞄运行配置。模型路径、推理 EP、相机内参、估计器参数、能量机关参数都从这里读。 |
 
 ## 当前主线
@@ -49,6 +51,8 @@
 - `[energy_mechanism_cfg]` 保存能量机关 tracker、aimer 和 MPC 参数。
 
 `detector_cfg.ort_ep = "auto"` 时，运行时会按平台和可见库选择 EP。macOS 默认 CoreML；Linux aarch64 在 CUDA、TensorRT 或 cuDNN 库可见时优先走硬件加速，否则回退；其他平台按 `se3_ort_ep` 的策略选择。
+
+日志由 `se3_log` 统一初始化。开发机默认写仓库根目录 `log/`，机器人部署环境中如果存在 `/var/opt/se3/logs`，文件日志写到该部署目录；也可以用 `SE3_LOG_DIR` 覆盖。
 
 ## 构建、检查和运行
 
