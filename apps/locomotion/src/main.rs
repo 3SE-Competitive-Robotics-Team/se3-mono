@@ -117,16 +117,14 @@ fn run_main() -> Result<(), Box<dyn Error>> {
     let command_source_kind = args.command_source.unwrap_or(robot.command.default_source);
     let command_source = build_command_source(&robot, command_source_kind, &args.gamepad)?;
 
-    let checkpoint = args
-        .checkpoint
-        .or_else(|| std::env::var_os("SE3_RECOVERY_CHECKPOINT").map(PathBuf::from))
-        .or_else(|| policy.checkpoint.clone());
+    let checkpoint = args.checkpoint.or_else(|| policy.checkpoint.clone());
     let cfg = LocomotionPolicyConfig {
         checkpoint: checkpoint.ok_or_else(missing_checkpoint_error)?,
         ort_ep: args.ort_ep.unwrap_or_else(|| policy.ort_ep.clone()),
         command_source: command_source_kind,
         fixed_command: robot.command.fixed,
         robot_cfg: robot.locomotion.robot_cfg.clone(),
+        action_decoder: policy.action_decoder_profile.clone(),
         transport: args.transport,
         port: args.port,
         sim_socket_path: args
@@ -294,7 +292,7 @@ fn resolve_policy<'a>(
 fn missing_checkpoint_error() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
-        "missing checkpoint; provide --checkpoint, SE3_RECOVERY_CHECKPOINT, or zoo policy checkpoint",
+        "missing checkpoint; provide --checkpoint or zoo policy checkpoint",
     )
 }
 

@@ -17,6 +17,7 @@ pub struct ReplayConfig {
     pub telemetry: PathBuf,
     pub checkpoint: Option<PathBuf>,
     pub ort_ep: String,
+    pub action_decoder: Option<PolicyActionDecoderConfig>,
     pub meta: Option<PathBuf>,
     pub max_rows: usize,
     pub print_every: usize,
@@ -91,12 +92,10 @@ pub fn replay_telemetry(cfg: ReplayConfig) -> Result<i32, ReplayError> {
     let checkpoint = resolve_checkpoint(cfg.checkpoint.as_deref(), &cfg.telemetry, &meta)?;
     check_checkpoint_hash(&checkpoint, &meta)?;
     let mut policy = load_policy(&checkpoint, &cfg.ort_ep)?;
-    let decoder = PolicyActionDecoder::new(PolicyActionDecoderConfig {
-        robot_cfg: RobotConfig::default(),
-        height_conditioned_action_default: true,
-        active_rod_semantics: true,
-        ..PolicyActionDecoderConfig::default()
-    });
+    let decoder = PolicyActionDecoder::new(resolve_action_decoder_config(
+        &meta,
+        cfg.action_decoder.as_ref(),
+    ));
     let command_height = command_height(&meta);
     let (stats, period_ms) = replay_rows(
         &cfg.telemetry,
@@ -348,6 +347,17 @@ fn command_height(meta: &Value) -> f32 {
         .and_then(|values| values.get(4))
         .and_then(Value::as_f64)
         .unwrap_or_else(|| RobotConfig::default().default_base_height) as f32
+}
+
+fn resolve_action_decoder_config(
+    meta: &Value,
+    fallback: Option<&PolicyActionDecoderConfig>,
+) -> PolicyActionDecoderConfig {
+    meta.get("action_decoder")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<PolicyActionDecoderConfig>(value).ok())
+        .or_else(|| fallback.cloned())
+        .unwrap_or_default()
 }
 
 fn iter_jsonl(path: &Path) -> Result<Vec<(usize, Value)>, ReplayError> {
