@@ -8,7 +8,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum InputError {
     #[error("failed to initialize gamepad input: {0}")]
-    GamepadInit(#[from] gilrs::Error),
+    GamepadInit(Box<gilrs::Error>),
     #[error("no connected gamepad")]
     NoConnectedGamepad,
 }
@@ -72,7 +72,7 @@ pub struct GamepadInput {
 
 impl GamepadInput {
     pub fn new(selector: GamepadSelector) -> Result<Self, InputError> {
-        let gilrs = Gilrs::new()?;
+        let gilrs = Gilrs::new().map_err(|err| InputError::GamepadInit(Box::new(err)))?;
         Ok(Self {
             gilrs,
             selector,

@@ -1169,9 +1169,9 @@ pub fn load_policy_runtime(
     ort_ep: &str,
 ) -> Result<LoadedPolicy, RecoveryRuntimeError> {
     match checkpoint.extension().and_then(|value| value.to_str()) {
-        Some("onnx") => Ok(LoadedPolicy::Ort(OrtPolicyRuntime::new(
+        Some("onnx") => Ok(LoadedPolicy::Ort(Box::new(OrtPolicyRuntime::new(
             checkpoint, ort_ep,
-        )?)),
+        )?))),
         _ => Err(RecoveryRuntimeError::UnsupportedCheckpoint(
             checkpoint.to_path_buf(),
         )),
@@ -1195,7 +1195,7 @@ struct StepOutput {
 }
 
 pub enum LoadedPolicy {
-    Ort(OrtPolicyRuntime),
+    Ort(Box<OrtPolicyRuntime>),
     #[cfg(test)]
     Noop,
 }
