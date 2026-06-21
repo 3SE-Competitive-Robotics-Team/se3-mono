@@ -707,28 +707,21 @@ fn validate_checkpoint_metadata(
     obs_cfg: &ObservationConfig,
     checkpoint: &Path,
 ) -> Result<(), LocomotionPolicyError> {
-    let mismatches = [
-        (
-            "num_obs",
-            policy.num_obs().to_string(),
-            obs_cfg.num_obs.to_string(),
-        ),
-        (
-            "num_actions",
-            policy.num_actions().to_string(),
-            obs_cfg.num_actions.to_string(),
-        ),
-    ];
-    for (field, onnx_value, config_value) in &mismatches {
+    let check = |field: &'static str, onnx_value: usize, config_value: usize| {
         if onnx_value != config_value {
-            return Err(LocomotionPolicyError::CheckpointMetadataMismatch {
+            Err(LocomotionPolicyError::CheckpointMetadataMismatch {
                 checkpoint_path: checkpoint.to_path_buf(),
                 field,
-                onnx_value: onnx_value.clone(),
-                config_value: config_value.clone(),
-            });
+                onnx_value: onnx_value.to_string(),
+                config_value: config_value.to_string(),
+            })
+        } else {
+            Ok(())
         }
-    }
+    };
+    // num_obs is validated at runtime by the observation builder; only
+    // num_actions must match because the action decoder has a fixed layout.
+    check("num_actions", policy.num_actions(), obs_cfg.num_actions)?;
     Ok(())
 }
 

@@ -116,7 +116,7 @@ se3-mono/
     se3_bus/
       Cargo.toml
       src/lib.rs
-    control_core/
+    locomotion_core/
       Cargo.toml
       src/lib.rs
     auto_strike_core/
@@ -284,7 +284,7 @@ tracing-subscriber = "0.3"
 
 早期可以先用简单 TCP、Unix domain socket 或本机消息队列实现。后续如果换 Zenoh、DDS 或 ROS 2，只改 `se3_bus` 和少量接入层。
 
-### `control_core`
+### `locomotion_core`
 
 负责控制逻辑：
 
@@ -315,7 +315,7 @@ tracing-subscriber = "0.3"
 
 ```text
 apps/locomotion
-  -> control_core
+  -> locomotion_core
   -> se3_config
   -> se3_bus
   -> se3_common
@@ -328,7 +328,7 @@ apps/auto_strike
   -> se3_common
   -> drivers/*
 
-control_core
+locomotion_core
   -> se3_common
 
 auto_strike_core
@@ -340,9 +340,9 @@ drivers/*
 
 不推荐的依赖方向：
 
-- `control_core` 依赖 `apps/locomotion`。
+- `locomotion_core` 依赖 `apps/locomotion`。
 - `auto_strike_core` 依赖 `apps/auto_strike`。
-- `control_core` 直接依赖具体相机或串口 SDK。
+- `locomotion_core` 直接依赖具体相机或串口 SDK。
 - `auto_strike_core` 直接控制电机。
 - `se3_common` 反向依赖任何业务 crate。
 
@@ -1210,7 +1210,7 @@ apps/locomotion
 apps/auto_strike
 crates/se3_common
 crates/se3_config
-crates/control_core
+crates/locomotion_core
 crates/auto_strike_core
 drivers/camera_mock
 robots/infantry_a
