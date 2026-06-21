@@ -12,6 +12,7 @@ members = [
     "crates/zoo",
     "tools/replay_telemetry",
     "tools/visualize_cdc_state",
+    "tools/debug_gamepad_command",
 ]
 
 [workspace.package]
