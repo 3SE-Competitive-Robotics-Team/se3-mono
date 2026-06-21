@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use crate::policy_observation::synthetic_default_state;
 use crate::policy_runtime::{
-    ACTION_FLAG_COMMAND_INACTIVE, ACTION_FLAG_DRY_RUN, LOCOMOTION_POLICY_RATE_HZ,
-    LocomotionPolicyError, LocomotionPolicyRuntime, TelemetryTiming,
+    ACTION_FLAG_COMMAND_INACTIVE, ACTION_FLAG_DRY_RUN, ACTION_FLAG_NONFINITE,
+    LOCOMOTION_POLICY_RATE_HZ, LocomotionPolicyError, LocomotionPolicyRuntime, TelemetryTiming,
 };
 
 impl LocomotionPolicyRuntime {
@@ -32,6 +32,12 @@ impl LocomotionPolicyRuntime {
             } else {
                 self.reset_policy_memory(false, "command_inactive")?;
                 let (obs, obs_flags) = self.build_observation(&state)?;
+                if obs_flags & ACTION_FLAG_NONFINITE != 0 {
+                    self.stats.nonfinite_frames += 1;
+                }
+                self.stats.last_target_joint_pos = state.joint_pos;
+                self.stats.last_target_wheel_vel = [0.0, 0.0];
+                self.action_seq = self.action_seq.wrapping_add(1);
                 (
                     [0.0; 6],
                     obs_flags | ACTION_FLAG_DRY_RUN | ACTION_FLAG_COMMAND_INACTIVE,
