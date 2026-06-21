@@ -1,30 +1,29 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use log::{info, warn};
+use log::info;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 
-use crate::fourbar::{output_to_policy_pos, output_to_policy_vel, policy_to_output_pos};
-use crate::policy_io::{PolicyActionDecoderConfig, PolicyIoError};
-use crate::{ObservationConfig, PolicyActionDecoder, RobotConfig};
-use se3_command::{Command, CommandSourceKind};
-
-use crate::cdc::{CdcError, CdcSerial, cdc_port_disappeared, resolve_cdc_port};
 use crate::command::LocomotionCommand;
-use crate::ort_policy::{OrtPolicyError, OrtPolicyRuntime};
-use crate::policy_observation::{LocomotionObservationBuilder, synthetic_default_state};
+use crate::fourbar::{output_to_policy_pos, output_to_policy_vel, policy_to_output_pos};
+use crate::ort_policy::OrtPolicyRuntime;
+use crate::policy_io::{PolicyActionDecoderConfig, PolicyIoError};
+use crate::policy_observation::LocomotionObservationBuilder;
 use crate::protocol::{
-    MSG_POLICY_STATE, PolicyCommandFrame, PolicyStateFrame, PolicyTargetFrame, ProtocolError,
-    StreamParser, decode_policy_state, pack_policy_command, pack_policy_target,
+    PolicyCommandFrame, PolicyStateFrame, PolicyTargetFrame, pack_policy_command,
+    pack_policy_target,
 };
+use crate::{ObservationConfig, PolicyActionDecoder, RobotConfig};
 
+// Re-export config types that were historically part of this module.
+pub use crate::runtime_config::{
+    FixedRuntimeCommandSource, LocomotionPolicyConfig, LocomotionPolicyError, LocomotionTransport,
+    RuntimeCommandSample, RuntimeCommandSource, RuntimeStats,
+};
 // Re-export runtime constants that were historically part of this module.
 pub use crate::runtime_constants::{
     ACTION_FLAG_COMMAND_INACTIVE, ACTION_FLAG_DRY_RUN, ACTION_FLAG_NONFINITE,
@@ -32,149 +31,6 @@ pub use crate::runtime_constants::{
     LOCOMOTION_POLICY_RATE_HZ, TELEMETRY_SCHEMA,
 };
 use crate::runtime_constants::{STATE_TIMEOUT_S, WRITE_TIMEOUT_S};
-
-#[derive(Debug, Error)]
-pub enum LocomotionPolicyError {
-    #[error("{0}")]
-    Cdc(#[from] CdcError),
-    #[error("{0}")]
-    Protocol(#[from] ProtocolError),
-    #[error("{0}")]
-    OrtPolicy(#[from] OrtPolicyError),
-    #[error("{0}")]
-    PolicyIo(#[from] PolicyIoError),
-    #[error("unsupported checkpoint type: {0}")]
-    UnsupportedCheckpoint(PathBuf),
-    #[error("sim transport failed to bind client socket {client_socket_path}")]
-    SimSocketBind {
-        client_socket_path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error(
-        "sim transport failed to connect to sim_loop socket {sim_socket_path}; start se3-sim-loop first with the same --socket-path, or pass a matching --sim-socket-path (client socket: {client_socket_path})"
-    )]
-    SimSocketConnect {
-        sim_socket_path: PathBuf,
-        client_socket_path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("io failed: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("json failed: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocomotionTransport {
-    Cdc,
-    Sim,
-}
-
-#[derive(Debug, Clone)]
-pub struct LocomotionPolicyConfig {
-    pub checkpoint: PathBuf,
-    pub ort_ep: String,
-    pub command_source: CommandSourceKind,
-    pub fixed_command: Command,
-    pub robot_cfg: RobotConfig,
-    pub action_decoder: PolicyActionDecoderConfig,
-    pub transport: LocomotionTransport,
-    pub port: String,
-    pub sim_socket_path: PathBuf,
-    pub sim_client_socket_path: PathBuf,
-    pub baudrate: i32,
-    pub device: String,
-    pub max_steps: usize,
-    pub dry_run: bool,
-    pub print_every: usize,
-    pub telemetry_log: Option<PathBuf>,
-    pub telemetry_log_every: usize,
-    pub telemetry_flush_every: usize,
-}
-
-impl Default for LocomotionPolicyConfig {
-    fn default() -> Self {
-        let robot_cfg = RobotConfig::default();
-        Self {
-            checkpoint: PathBuf::new(),
-            ort_ep: "auto".to_string(),
-            command_source: CommandSourceKind::Fixed,
-            fixed_command: Command::idle(robot_cfg.default_base_height as f32),
-            action_decoder: PolicyActionDecoderConfig {
-                robot_cfg: robot_cfg.clone(),
-                ..PolicyActionDecoderConfig::default()
-            },
-            robot_cfg,
-            transport: LocomotionTransport::Cdc,
-            port: DEFAULT_CDC_PORT.to_string(),
-            sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
-            sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
-            baudrate: 921600,
-            device: "auto".to_string(),
-            max_steps: 0,
-            dry_run: false,
-            print_every: 50,
-            telemetry_log: None,
-            telemetry_log_every: 1,
-            telemetry_flush_every: 25,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeStats {
-    pub steps: usize,
-    pub state_frames: usize,
-    pub action_frames: usize,
-    pub timeout_frames: usize,
-    pub nonfinite_frames: usize,
-    pub last_state_seq: u32,
-    pub last_action: [f32; 6],
-    pub last_target_joint_pos: [f32; 4],
-    pub last_target_wheel_vel: [f32; 2],
-    pub last_state_joint_pos: [f32; 4],
-    pub last_state_target_joint_pos: [f32; 4],
-    pub last_state_hip_torque: [f32; 4],
-    pub last_state_wheel_torque: [f32; 2],
-    pub last_state_wheel_motor_torque: [f32; 2],
-    pub policy_inference_frames: usize,
-    pub last_policy_inference_ms: f64,
-    pub total_policy_inference_ms: f64,
-    pub max_policy_inference_ms: f64,
-    pub last_step_policy_inference_ms: Option<f64>,
-    pub last_action_flags: u32,
-    pub last_state_output_enabled: u8,
-}
-
-impl Default for RuntimeStats {
-    fn default() -> Self {
-        Self {
-            steps: 0,
-            state_frames: 0,
-            action_frames: 0,
-            timeout_frames: 0,
-            nonfinite_frames: 0,
-            last_state_seq: 0,
-            last_action: [0.0; 6],
-            last_target_joint_pos: [0.0; 4],
-            last_target_wheel_vel: [0.0; 2],
-            last_state_joint_pos: [0.0; 4],
-            last_state_target_joint_pos: [0.0; 4],
-            last_state_hip_torque: [0.0; 4],
-            last_state_wheel_torque: [0.0; 2],
-            last_state_wheel_motor_torque: [0.0; 2],
-            policy_inference_frames: 0,
-            last_policy_inference_ms: 0.0,
-            total_policy_inference_ms: 0.0,
-            max_policy_inference_ms: 0.0,
-            last_step_policy_inference_ms: None,
-            last_action_flags: 0,
-            last_state_output_enabled: 0,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecodedPolicyTarget {
@@ -218,27 +74,27 @@ impl LocomotionActionTargetDecoder {
 pub struct LocomotionPolicyRuntime {
     pub cfg: LocomotionPolicyConfig,
     pub obs_cfg: ObservationConfig,
-    policy: LoadedPolicy,
-    obs_builder: LocomotionObservationBuilder,
-    target_decoder: LocomotionActionTargetDecoder,
+    pub(crate) policy: LoadedPolicy,
+    pub(crate) obs_builder: LocomotionObservationBuilder,
+    pub(crate) target_decoder: LocomotionActionTargetDecoder,
     pub stats: RuntimeStats,
-    last_action: [f32; 6],
-    action_seq: u32,
-    policy_memory_clean: bool,
-    session_id: String,
-    reset_id: usize,
-    reconnect_count: usize,
-    resolved_port: Option<String>,
-    sim_fourbar_surrogate: bool,
-    last_sample_monotonic: Option<Instant>,
-    last_policy_reset_reason: String,
-    checkpoint_sha256: Option<String>,
-    start_monotonic: Instant,
-    last_print_monotonic: Instant,
-    last_print_steps: usize,
-    telemetry: TelemetryLogger,
-    command_source: Box<dyn RuntimeCommandSource>,
-    last_command_sample: RuntimeCommandSample,
+    pub(crate) last_action: [f32; 6],
+    pub(crate) action_seq: u32,
+    pub(crate) policy_memory_clean: bool,
+    pub(crate) session_id: String,
+    pub(crate) reset_id: usize,
+    pub(crate) reconnect_count: usize,
+    pub(crate) resolved_port: Option<String>,
+    pub(crate) sim_fourbar_surrogate: bool,
+    pub(crate) last_sample_monotonic: Option<Instant>,
+    pub(crate) last_policy_reset_reason: String,
+    pub(crate) checkpoint_sha256: Option<String>,
+    pub(crate) start_monotonic: Instant,
+    pub(crate) last_print_monotonic: Instant,
+    pub(crate) last_print_steps: usize,
+    pub(crate) telemetry: TelemetryLogger,
+    pub(crate) command_source: Box<dyn RuntimeCommandSource>,
+    pub(crate) last_command_sample: RuntimeCommandSample,
 }
 
 impl LocomotionPolicyRuntime {
@@ -353,332 +209,7 @@ impl LocomotionPolicyRuntime {
         result.map(|_| self.stats.clone())
     }
 
-    fn run_dry(&mut self) -> Result<(), LocomotionPolicyError> {
-        let max_steps = if self.cfg.max_steps > 0 {
-            self.cfg.max_steps
-        } else {
-            (LOCOMOTION_POLICY_RATE_HZ * 2.0) as usize
-        };
-        for step in 0..max_steps {
-            let loop_started = Instant::now();
-            let state = synthetic_default_state(step as u32);
-            self.stats.state_frames += 1;
-            self.sample_command();
-            let (action, flags, obs, policy_inference_ms) = if self.last_command_sample.active {
-                let (action, flags, obs, policy_inference_ms) = self.act_from_state(&state)?;
-                self.decode_target(action)?;
-                (
-                    action,
-                    flags | ACTION_FLAG_DRY_RUN,
-                    obs,
-                    Some(policy_inference_ms),
-                )
-            } else {
-                self.reset_policy_memory(false, "command_inactive")?;
-                let (obs, obs_flags) = self.build_observation(&state)?;
-                (
-                    [0.0; 6],
-                    obs_flags | ACTION_FLAG_DRY_RUN | ACTION_FLAG_COMMAND_INACTIVE,
-                    obs,
-                    None,
-                )
-            };
-            self.record_action(&state, action, flags, policy_inference_ms);
-            self.write_telemetry(
-                &state,
-                &obs,
-                &action,
-                flags,
-                TelemetryTiming {
-                    policy_inference_ms,
-                    state_age_s: Some(0.0),
-                    loop_started,
-                    write_ms: None,
-                },
-            )?;
-            self.maybe_print();
-        }
-        Ok(())
-    }
-
-    fn run_sim(&mut self) -> Result<(), LocomotionPolicyError> {
-        let max_steps = self.cfg.max_steps;
-        let period = Duration::from_secs_f64(1.0 / LOCOMOTION_POLICY_RATE_HZ);
-        let period_s = period.as_secs_f64();
-        self.sim_fourbar_surrogate = true;
-        let state_timeout = Duration::from_secs_f64(STATE_TIMEOUT_S);
-        self.reset_policy_memory(true, "sim_connect")?;
-        unlink_socket_path_if_present(&self.cfg.sim_client_socket_path)?;
-        let client_socket_guard = SocketPathGuard::new(self.cfg.sim_client_socket_path.clone());
-        let socket = match UnixDatagram::bind(&self.cfg.sim_client_socket_path) {
-            Ok(socket) => socket,
-            Err(err) => {
-                return Err(LocomotionPolicyError::SimSocketBind {
-                    client_socket_path: self.cfg.sim_client_socket_path.clone(),
-                    source: err,
-                });
-            }
-        };
-        if let Err(err) = socket.connect(&self.cfg.sim_socket_path) {
-            return Err(LocomotionPolicyError::SimSocketConnect {
-                sim_socket_path: self.cfg.sim_socket_path.clone(),
-                client_socket_path: self.cfg.sim_client_socket_path.clone(),
-                source: err,
-            });
-        }
-        socket.set_read_timeout(Some(state_timeout))?;
-        self.resolved_port = Some(self.cfg.sim_socket_path.to_string_lossy().into_owned());
-        self.write_event(
-            "sim_open",
-            json!({
-                "sim_socket_path": self.cfg.sim_socket_path,
-                "sim_client_socket_path": self.cfg.sim_client_socket_path,
-            }),
-        )?;
-        let handshake_state = synthetic_default_state(0);
-        let handshake = self.make_hold_target_packet(&handshake_state)?;
-        socket.send(&handshake)?;
-        let mut parser = StreamParser::default();
-        let mut buf = [0_u8; 4096];
-        let mut latest_state: Option<PolicyStateFrame> = None;
-        let mut latest_state_time = Instant::now();
-        let mut next_tick = Instant::now() + period;
-        while max_steps == 0 || self.stats.steps < max_steps {
-            let loop_started = Instant::now();
-            let now = Instant::now();
-            if now >= next_tick {
-                next_tick += period;
-                let Some(state) = latest_state.as_ref() else {
-                    self.stats.steps += 1;
-                    self.stats.timeout_frames += 1;
-                    self.maybe_print();
-                    continue;
-                };
-                let age_s = now
-                    .saturating_duration_since(latest_state_time)
-                    .as_secs_f64();
-                let StepOutput {
-                    action,
-                    flags,
-                    obs,
-                    policy_inference_ms,
-                    packet,
-                    command_packet,
-                } = self.step_from_state(state, age_s)?;
-                let write_started = Instant::now();
-                write_step_output_packets(
-                    command_packet.as_deref(),
-                    packet.as_deref(),
-                    |packet| socket.send(packet).map(|_| ()),
-                )?;
-                let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
-                self.record_action(state, action, flags, policy_inference_ms);
-                self.write_telemetry(
-                    state,
-                    &obs,
-                    &action,
-                    flags,
-                    TelemetryTiming {
-                        policy_inference_ms,
-                        state_age_s: Some(age_s),
-                        loop_started,
-                        write_ms: Some(write_ms),
-                    },
-                )?;
-                self.maybe_print();
-                continue;
-            }
-            let wait_s = (next_tick.saturating_duration_since(now).as_secs_f64())
-                .min(period_s)
-                .max(0.0);
-            socket.set_read_timeout(Some(Duration::from_secs_f64(wait_s)))?;
-            let n = match socket.recv(&mut buf) {
-                Ok(n) => n,
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    0
-                }
-                Err(err) => return Err(err.into()),
-            };
-            if n > 0 {
-                (latest_state, latest_state_time) =
-                    self.read_sim_states(&mut parser, &buf[..n], latest_state, latest_state_time)?;
-            }
-        }
-        client_socket_guard.cleanup()?;
-        Ok(())
-    }
-
-    fn read_sim_states(
-        &mut self,
-        parser: &mut StreamParser,
-        data: &[u8],
-        mut latest_state: Option<PolicyStateFrame>,
-        mut latest_state_time: Instant,
-    ) -> Result<(Option<PolicyStateFrame>, Instant), LocomotionPolicyError> {
-        for message in parser.feed(data) {
-            if message.msg_type != MSG_POLICY_STATE {
-                continue;
-            }
-            let mut state = decode_policy_state(&message)?;
-            if self.sim_fourbar_surrogate {
-                state = sim_output_state_to_policy_state(state);
-            }
-            latest_state_time = Instant::now();
-            self.stats.state_frames += 1;
-            self.stats.last_state_seq = state.seq;
-            latest_state = Some(state);
-        }
-        Ok((latest_state, latest_state_time))
-    }
-
-    fn run_cdc(&mut self) -> Result<(), LocomotionPolicyError> {
-        let max_steps = self.cfg.max_steps;
-        let period = Duration::from_secs_f64(1.0 / LOCOMOTION_POLICY_RATE_HZ);
-        let period_s = period.as_secs_f64();
-        self.sim_fourbar_surrogate = false;
-
-        while max_steps == 0 || self.stats.steps < max_steps {
-            self.reset_policy_memory(true, "cdc_connect")?;
-            let mut parser = StreamParser::default();
-            let mut latest_state: Option<PolicyStateFrame> = None;
-            let mut latest_state_time = Instant::now();
-            let mut next_tick = Instant::now();
-            let port = resolve_cdc_port(&self.cfg.port);
-            self.resolved_port = Some(port.clone());
-            let loop_result = (|| -> Result<(), LocomotionPolicyError> {
-                let mut serial = CdcSerial::new(&port, self.cfg.baudrate);
-                serial.open()?;
-                info!("USB CDC open: port={port} baudrate={}", self.cfg.baudrate);
-                self.write_event(
-                    "cdc_open",
-                    json!({ "port": port, "reconnect_count": self.reconnect_count }),
-                )?;
-                while max_steps == 0 || self.stats.steps < max_steps {
-                    let loop_started = Instant::now();
-                    let now = Instant::now();
-                    let wait_s = (next_tick.saturating_duration_since(now).as_secs_f64())
-                        .min(period_s)
-                        .max(0.0);
-                    if serial.wait_readable(wait_s)? {
-                        (latest_state, latest_state_time) = self.read_states(
-                            &mut serial,
-                            &mut parser,
-                            latest_state,
-                            latest_state_time,
-                        )?;
-                    }
-                    if cdc_port_disappeared(&port) {
-                        return Err(CdcError::Disconnected(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!("USB CDC port disappeared: {port}"),
-                        ))
-                        .into());
-                    }
-
-                    let now = Instant::now();
-                    if now < next_tick {
-                        continue;
-                    }
-                    next_tick += period;
-                    let Some(state) = latest_state.as_ref() else {
-                        self.stats.steps += 1;
-                        self.maybe_print();
-                        continue;
-                    };
-                    let age_s = now
-                        .saturating_duration_since(latest_state_time)
-                        .as_secs_f64();
-                    let StepOutput {
-                        action,
-                        flags,
-                        obs,
-                        policy_inference_ms,
-                        packet,
-                        command_packet,
-                    } = self.step_from_state(state, age_s)?;
-                    let write_started = Instant::now();
-                    write_step_output_packets(
-                        command_packet.as_deref(),
-                        packet.as_deref(),
-                        |packet| serial.write_all(packet, WRITE_TIMEOUT_S),
-                    )?;
-                    let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
-                    self.record_action(state, action, flags, policy_inference_ms);
-                    self.write_telemetry(
-                        state,
-                        &obs,
-                        &action,
-                        flags,
-                        TelemetryTiming {
-                            policy_inference_ms,
-                            state_age_s: Some(age_s),
-                            loop_started,
-                            write_ms: Some(write_ms),
-                        },
-                    )?;
-                    self.maybe_print();
-                }
-                Ok(())
-            })();
-
-            match loop_result {
-                Ok(()) => return Ok(()),
-                Err(LocomotionPolicyError::Cdc(
-                    err @ (CdcError::Disconnected(_) | CdcError::WriteTimeout(_)),
-                )) => {
-                    let error_text = err.to_string();
-                    self.reconnect_count += 1;
-                    self.reset_policy_memory(true, "cdc_disconnected")?;
-                    self.write_event(
-                        "cdc_disconnected",
-                        json!({
-                            "port": port,
-                            "reconnect_count": self.reconnect_count,
-                            "error": error_text,
-                        }),
-                    )?;
-                    warn!(
-                        "USB CDC disconnected: port={port}; reconnecting in {CDC_RECONNECT_DELAY_S:.1}s"
-                    );
-                    thread::sleep(Duration::from_secs_f64(CDC_RECONNECT_DELAY_S));
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Ok(())
-    }
-
-    fn read_states(
-        &mut self,
-        serial: &mut CdcSerial,
-        parser: &mut StreamParser,
-        mut latest_state: Option<PolicyStateFrame>,
-        mut latest_state_time: Instant,
-    ) -> Result<(Option<PolicyStateFrame>, Instant), LocomotionPolicyError> {
-        loop {
-            let data = serial.read_available()?;
-            if data.is_empty() {
-                return Ok((latest_state, latest_state_time));
-            }
-            for message in parser.feed(&data) {
-                if message.msg_type != MSG_POLICY_STATE {
-                    continue;
-                }
-                let state = decode_policy_state(&message)?;
-                latest_state_time = Instant::now();
-                self.stats.state_frames += 1;
-                self.stats.last_state_seq = state.seq;
-                latest_state = Some(state);
-            }
-        }
-    }
-
-    fn build_observation(
+    pub(crate) fn build_observation(
         &self,
         state: &PolicyStateFrame,
     ) -> Result<(Vec<f32>, u32), LocomotionPolicyError> {
@@ -691,7 +222,7 @@ impl LocomotionPolicyRuntime {
         Ok((result.obs, flags))
     }
 
-    fn step_from_state(
+    pub(crate) fn step_from_state(
         &mut self,
         state: &PolicyStateFrame,
         age_s: f64,
@@ -713,8 +244,8 @@ impl LocomotionPolicyRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = None;
-            command_packet = None;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else if age_s > STATE_TIMEOUT_S {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
@@ -759,7 +290,7 @@ impl LocomotionPolicyRuntime {
         })
     }
 
-    fn sample_command(&mut self) {
+    pub(crate) fn sample_command(&mut self) {
         let sample = self.command_source.sample();
         let command =
             LocomotionCommand::from_command(sample.command, &self.target_decoder.robot_cfg);
@@ -768,7 +299,7 @@ impl LocomotionPolicyRuntime {
         self.last_command_sample = sample;
     }
 
-    fn act_from_state(
+    pub(crate) fn act_from_state(
         &mut self,
         state: &PolicyStateFrame,
     ) -> Result<([f32; 6], u32, Vec<f32>, f64), LocomotionPolicyError> {
@@ -793,7 +324,7 @@ impl LocomotionPolicyRuntime {
         Ok((action, flags, obs, policy_inference_ms))
     }
 
-    fn record_policy_inference(&mut self, policy_inference_ms: f64) {
+    pub(crate) fn record_policy_inference(&mut self, policy_inference_ms: f64) {
         self.stats.policy_inference_frames += 1;
         self.stats.last_policy_inference_ms = policy_inference_ms;
         self.stats.total_policy_inference_ms += policy_inference_ms;
@@ -809,7 +340,7 @@ impl LocomotionPolicyRuntime {
         }
     }
 
-    fn reset_policy_memory(
+    pub(crate) fn reset_policy_memory(
         &mut self,
         force: bool,
         reason: &str,
@@ -831,7 +362,10 @@ impl LocomotionPolicyRuntime {
         Ok(())
     }
 
-    fn make_target_packet(&mut self, action: [f32; 6]) -> Result<Vec<u8>, LocomotionPolicyError> {
+    pub(crate) fn make_target_packet(
+        &mut self,
+        action: [f32; 6],
+    ) -> Result<Vec<u8>, LocomotionPolicyError> {
         let target = self.decode_target(action)?;
         let joint_pos = self.target_joint_pos_for_transport(target.joint_pos);
         let frame = PolicyTargetFrame {
@@ -843,7 +377,7 @@ impl LocomotionPolicyRuntime {
         Ok(pack_policy_target(&frame)?)
     }
 
-    fn make_hold_target_packet(
+    pub(crate) fn make_hold_target_packet(
         &mut self,
         state: &PolicyStateFrame,
     ) -> Result<Vec<u8>, LocomotionPolicyError> {
@@ -861,7 +395,7 @@ impl LocomotionPolicyRuntime {
         Ok(pack_policy_target(&frame)?)
     }
 
-    fn make_command_packet(&self) -> Result<Vec<u8>, LocomotionPolicyError> {
+    pub(crate) fn make_command_packet(&self) -> Result<Vec<u8>, LocomotionPolicyError> {
         let frame = PolicyCommandFrame {
             seq: self.action_seq.wrapping_sub(1),
             command: self.obs_builder.policy_command(),
@@ -877,7 +411,7 @@ impl LocomotionPolicyRuntime {
         }
     }
 
-    fn decode_target(
+    pub(crate) fn decode_target(
         &mut self,
         action: [f32; 6],
     ) -> Result<DecodedPolicyTarget, LocomotionPolicyError> {
@@ -887,7 +421,7 @@ impl LocomotionPolicyRuntime {
         Ok(target)
     }
 
-    fn record_action(
+    pub(crate) fn record_action(
         &mut self,
         state: &PolicyStateFrame,
         action: [f32; 6],
@@ -912,7 +446,7 @@ impl LocomotionPolicyRuntime {
         }
     }
 
-    fn write_telemetry(
+    pub(crate) fn write_telemetry(
         &mut self,
         state: &PolicyStateFrame,
         obs: &[f32],
@@ -1066,7 +600,7 @@ impl LocomotionPolicyRuntime {
         Ok(())
     }
 
-    fn write_event(
+    pub(crate) fn write_event(
         &mut self,
         event: &str,
         fields: serde_json::Value,
@@ -1093,7 +627,7 @@ impl LocomotionPolicyRuntime {
         Ok(())
     }
 
-    fn maybe_print(&mut self) {
+    pub(crate) fn maybe_print(&mut self) {
         if self.cfg.print_every == 0 || !self.stats.steps.is_multiple_of(self.cfg.print_every) {
             return;
         }
@@ -1150,7 +684,7 @@ impl LocomotionPolicyRuntime {
     }
 }
 
-fn write_step_output_packets<F, E>(
+pub(crate) fn write_step_output_packets<F, E>(
     command_packet: Option<&[u8]>,
     packet: Option<&[u8]>,
     mut write: F,
@@ -1181,20 +715,20 @@ pub fn load_policy_runtime(
     }
 }
 
-struct TelemetryTiming {
-    policy_inference_ms: Option<f64>,
-    state_age_s: Option<f64>,
-    loop_started: Instant,
-    write_ms: Option<f64>,
+pub(crate) struct TelemetryTiming {
+    pub(crate) policy_inference_ms: Option<f64>,
+    pub(crate) state_age_s: Option<f64>,
+    pub(crate) loop_started: Instant,
+    pub(crate) write_ms: Option<f64>,
 }
 
-struct StepOutput {
-    action: [f32; 6],
-    flags: u32,
-    obs: Vec<f32>,
-    policy_inference_ms: Option<f64>,
-    packet: Option<Vec<u8>>,
-    command_packet: Option<Vec<u8>>,
+pub(crate) struct StepOutput {
+    pub(crate) action: [f32; 6],
+    pub(crate) flags: u32,
+    pub(crate) obs: Vec<f32>,
+    pub(crate) policy_inference_ms: Option<f64>,
+    pub(crate) packet: Option<Vec<u8>>,
+    pub(crate) command_packet: Option<Vec<u8>>,
 }
 
 pub enum LoadedPolicy {
@@ -1423,7 +957,7 @@ fn resolve_telemetry_log_path(path: PathBuf) -> Result<PathBuf, std::io::Error> 
     )))
 }
 
-fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1438,16 +972,16 @@ fn unlink_socket_path_if_present(path: &Path) -> Result<(), std::io::Error> {
     std::fs::remove_file(path)
 }
 
-struct SocketPathGuard {
+pub(crate) struct SocketPathGuard {
     path: PathBuf,
 }
 
 impl SocketPathGuard {
-    fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
-    fn cleanup(&self) -> Result<(), std::io::Error> {
+    pub(crate) fn cleanup(&self) -> Result<(), std::io::Error> {
         unlink_socket_path_if_present(&self.path)
     }
 }
@@ -1516,7 +1050,7 @@ fn action_decoder_config_json(
     value
 }
 
-fn sim_output_state_to_policy_state(mut state: PolicyStateFrame) -> PolicyStateFrame {
+pub(crate) fn sim_output_state_to_policy_state(mut state: PolicyStateFrame) -> PolicyStateFrame {
     let output_pos = state.joint_pos.map(|value| value as f64);
     let output_vel = state.joint_vel.map(|value| value as f64);
     let output_target = state.target_joint_pos.map(|value| value as f64);
@@ -1579,58 +1113,6 @@ fn target_mode_name(flags: u32) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RuntimeCommandSample {
-    pub command: Command,
-    pub source: CommandSourceKind,
-    pub active: bool,
-    pub device_id: Option<usize>,
-    pub device_name: Option<String>,
-}
-
-impl RuntimeCommandSample {
-    pub fn fixed(command: Command) -> Self {
-        Self {
-            command,
-            source: CommandSourceKind::Fixed,
-            active: true,
-            device_id: None,
-            device_name: None,
-        }
-    }
-
-    pub fn xinput_idle(command: Command) -> Self {
-        Self {
-            command,
-            source: CommandSourceKind::XInput,
-            active: false,
-            device_id: None,
-            device_name: None,
-        }
-    }
-}
-
-pub trait RuntimeCommandSource {
-    fn sample(&mut self) -> RuntimeCommandSample;
-}
-
-#[derive(Debug)]
-pub struct FixedRuntimeCommandSource {
-    command: Command,
-}
-
-impl FixedRuntimeCommandSource {
-    pub fn new(command: Command) -> Self {
-        Self { command }
-    }
-}
-
-impl RuntimeCommandSource for FixedRuntimeCommandSource {
-    fn sample(&mut self) -> RuntimeCommandSample {
-        RuntimeCommandSample::fixed(self.command)
-    }
-}
-
 fn fmt_values(values: &[f32]) -> String {
     values
         .iter()
@@ -1653,9 +1135,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::policy_observation::synthetic_default_state;
+    use crate::protocol::StreamParser;
+    use se3_command::Command;
 
     #[test]
     fn target_decoder_matches_python_reference() {
@@ -1722,35 +1204,6 @@ mod tests {
     }
 
     #[test]
-    fn cdc_transport_writes_command_packet_before_target_packet() {
-        let (master_fd, slave_path) = open_pty_pair();
-        let mut state = synthetic_default_state(21);
-        state.output_enabled = 0;
-        let state_packet = crate::protocol::pack_policy_state(&state).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let reader_stop = Arc::clone(&stop);
-        let reader =
-            std::thread::spawn(move || collect_cdc_output(master_fd, state_packet, reader_stop));
-
-        let mut runtime = test_runtime_without_policy();
-        runtime.cfg.transport = LocomotionTransport::Cdc;
-        runtime.cfg.port = slave_path;
-        runtime.cfg.baudrate = 115200;
-        runtime.cfg.max_steps = 2;
-        runtime.cfg.print_every = 0;
-        runtime.run_cdc().unwrap();
-
-        stop.store(true, Ordering::Relaxed);
-        let messages = reader.join().unwrap();
-        assert!(
-            messages.windows(2).any(|pair| {
-                pair[0] == crate::protocol::MSG_COMMAND && pair[1] == crate::protocol::MSG_TARGET
-            }),
-            "expected command packet followed by target packet, got {messages:?}",
-        );
-    }
-
-    #[test]
     fn unlink_socket_path_refuses_regular_file() {
         let path = std::env::temp_dir().join(format!(
             "se3_regular_{}_{}",
@@ -1762,94 +1215,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(path.exists());
         std::fs::remove_file(path).unwrap();
-    }
-
-    fn open_pty_pair() -> (libc::c_int, String) {
-        let mut master_fd: libc::c_int = -1;
-        let mut slave_fd: libc::c_int = -1;
-        let mut name = [0 as libc::c_char; 128];
-        let rc = unsafe {
-            libc::openpty(
-                &mut master_fd,
-                &mut slave_fd,
-                name.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
-        let slave_path = unsafe { CStr::from_ptr(name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            !slave_path.is_empty(),
-            "openpty did not return a slave path"
-        );
-        let close_rc = unsafe { libc::close(slave_fd) };
-        assert_eq!(
-            close_rc,
-            0,
-            "close slave fd failed: {}",
-            std::io::Error::last_os_error()
-        );
-        (master_fd, slave_path)
-    }
-
-    fn collect_cdc_output(
-        master_fd: libc::c_int,
-        state_packet: Vec<u8>,
-        stop: Arc<AtomicBool>,
-    ) -> Vec<u8> {
-        let mut parser = StreamParser::default();
-        let mut message_types = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
-            let _ =
-                unsafe { libc::write(master_fd, state_packet.as_ptr().cast(), state_packet.len()) };
-            let mut poll_fd = libc::pollfd {
-                fd: master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let rc = unsafe { libc::poll(&mut poll_fd, 1, 20) };
-            if rc > 0 && poll_fd.revents & libc::POLLIN != 0 {
-                let mut buf = [0_u8; 4096];
-                let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-                if n > 0 {
-                    message_types.extend(
-                        parser
-                            .feed(&buf[..n as usize])
-                            .into_iter()
-                            .map(|message| message.msg_type),
-                    );
-                }
-            }
-        }
-        // Final drain: read any remaining bytes that were written before the
-        // stop signal but not yet consumed by the polling loop.
-        loop {
-            let mut poll_fd = libc::pollfd {
-                fd: master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            if unsafe { libc::poll(&mut poll_fd, 1, 0) } <= 0 {
-                break;
-            }
-            let mut buf = [0_u8; 4096];
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            message_types.extend(
-                parser
-                    .feed(&buf[..n as usize])
-                    .into_iter()
-                    .map(|message| message.msg_type),
-            );
-        }
-        let _ = unsafe { libc::close(master_fd) };
-        message_types
     }
 
     fn test_runtime_without_policy() -> LocomotionPolicyRuntime {
