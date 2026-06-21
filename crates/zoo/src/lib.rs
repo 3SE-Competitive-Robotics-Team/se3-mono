@@ -44,8 +44,6 @@ impl RobotProfile {
 pub struct LocomotionProfile {
     pub sim_socket_path: PathBuf,
     pub sim_client_socket_path: PathBuf,
-    pub state_timeout_s: f64,
-    pub write_timeout_s: f64,
     pub default_policy_id: String,
     pub robot_cfg: RobotConfig,
 }
@@ -192,8 +190,6 @@ pub fn serial_leg_dev() -> RobotProfile {
         locomotion: LocomotionProfile {
             sim_socket_path: PathBuf::from("/tmp/se3_sim_loop.sock"),
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
-            state_timeout_s: 0.10,
-            write_timeout_s: 0.02,
             default_policy_id: default_policy_id.clone(),
             robot_cfg: robot_cfg.clone(),
         },
@@ -388,7 +384,7 @@ mod tests {
     #[test]
     fn cloned_profiles_do_not_share_mutable_state() {
         let mut cloned = get_robot("serial_leg_dev").unwrap();
-        cloned.locomotion.state_timeout_s = 0.20;
+        cloned.locomotion.sim_client_socket_path = PathBuf::from("/tmp/other.sock");
         cloned.locomotion.robot_cfg.leg_kp = 75.0;
         cloned.policies[0].ort_ep = "auto".to_string();
         cloned.policies[0].action_decoder_profile.robot_cfg.leg_kp = 12.0;
@@ -396,7 +392,10 @@ mod tests {
         let fresh = get_robot("serial_leg_dev").unwrap();
         let fresh_policy = fresh.default_policy().unwrap();
 
-        assert_eq!(fresh.locomotion.state_timeout_s, 0.10);
+        assert_eq!(
+            fresh.locomotion.sim_client_socket_path,
+            PathBuf::from("/tmp/se3_locomotion.sock")
+        );
         assert_eq!(
             fresh.locomotion.robot_cfg.leg_kp,
             RobotConfig::default().leg_kp

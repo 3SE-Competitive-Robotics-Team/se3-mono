@@ -25,15 +25,13 @@ use crate::protocol::{
     StreamParser, decode_policy_state, pack_policy_command, pack_policy_target,
 };
 
-pub const DEFAULT_CDC_PORT: &str = "auto";
-pub const CDC_RECONNECT_DELAY_S: f64 = 1.0;
-pub const LOCOMOTION_POLICY_RATE_HZ: f64 = 50.0;
-pub const TELEMETRY_SCHEMA: &str = "se3_locomotion_telemetry";
-pub const ACTION_FLAG_DRY_RUN: u32 = 1 << 0;
-pub const ACTION_FLAG_TIMEOUT: u32 = 1 << 1;
-pub const ACTION_FLAG_NONFINITE: u32 = 1 << 2;
-pub const ACTION_FLAG_OUTPUT_DISABLED_HOLD: u32 = 1 << 3;
-pub const ACTION_FLAG_COMMAND_INACTIVE: u32 = 1 << 4;
+// Re-export runtime constants that were historically part of this module.
+pub use crate::runtime_constants::{
+    ACTION_FLAG_COMMAND_INACTIVE, ACTION_FLAG_DRY_RUN, ACTION_FLAG_NONFINITE,
+    ACTION_FLAG_OUTPUT_DISABLED_HOLD, ACTION_FLAG_TIMEOUT, CDC_RECONNECT_DELAY_S, DEFAULT_CDC_PORT,
+    LOCOMOTION_POLICY_RATE_HZ, TELEMETRY_SCHEMA,
+};
+use crate::runtime_constants::{STATE_TIMEOUT_S, WRITE_TIMEOUT_S};
 
 #[derive(Debug, Error)]
 pub enum LocomotionPolicyError {
@@ -47,10 +45,6 @@ pub enum LocomotionPolicyError {
     PolicyIo(#[from] PolicyIoError),
     #[error("unsupported checkpoint type: {0}")]
     UnsupportedCheckpoint(PathBuf),
-    #[error(
-        "invalid locomotion policy config: {name} must be a finite non-negative duration, got {value}"
-    )]
-    InvalidDuration { name: &'static str, value: f64 },
     #[error("sim transport failed to bind client socket {client_socket_path}")]
     SimSocketBind {
         client_socket_path: PathBuf,
@@ -92,8 +86,6 @@ pub struct LocomotionPolicyConfig {
     pub sim_client_socket_path: PathBuf,
     pub baudrate: i32,
     pub device: String,
-    pub state_timeout_s: f64,
-    pub write_timeout_s: f64,
     pub max_steps: usize,
     pub dry_run: bool,
     pub print_every: usize,
@@ -121,8 +113,6 @@ impl Default for LocomotionPolicyConfig {
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
             baudrate: 921600,
             device: "auto".to_string(),
-            state_timeout_s: 0.10,
-            write_timeout_s: 0.02,
             max_steps: 0,
             dry_run: false,
             print_every: 50,
@@ -261,7 +251,6 @@ impl LocomotionPolicyRuntime {
         cfg: LocomotionPolicyConfig,
         command_source: Box<dyn RuntimeCommandSource>,
     ) -> Result<Self, LocomotionPolicyError> {
-        validate_policy_config(&cfg)?;
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
@@ -345,7 +334,6 @@ impl LocomotionPolicyRuntime {
     }
 
     pub fn run(&mut self) -> Result<RuntimeStats, LocomotionPolicyError> {
-        validate_policy_config(&self.cfg)?;
         info!(
             "Locomotion policy runtime: checkpoint={} iter={} type={} device={}",
             self.cfg.checkpoint.display(),
@@ -418,16 +406,7 @@ impl LocomotionPolicyRuntime {
         let period = Duration::from_secs_f64(1.0 / LOCOMOTION_POLICY_RATE_HZ);
         let period_s = period.as_secs_f64();
         self.sim_fourbar_surrogate = true;
-        let state_timeout =
-            Duration::try_from_secs_f64(self.cfg.state_timeout_s).map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "state-timeout-s must be a finite non-negative duration: {} ({err})",
-                        self.cfg.state_timeout_s
-                    ),
-                )
-            })?;
+        let state_timeout = Duration::from_secs_f64(STATE_TIMEOUT_S);
         self.reset_policy_memory(true, "sim_connect")?;
         unlink_socket_path_if_present(&self.cfg.sim_client_socket_path)?;
         let client_socket_guard = SocketPathGuard::new(self.cfg.sim_client_socket_path.clone());
@@ -626,7 +605,7 @@ impl LocomotionPolicyRuntime {
                     write_step_output_packets(
                         command_packet.as_deref(),
                         packet.as_deref(),
-                        |packet| serial.write_all(packet, self.cfg.write_timeout_s),
+                        |packet| serial.write_all(packet, WRITE_TIMEOUT_S),
                     )?;
                     let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                     self.record_action(state, action, flags, policy_inference_ms);
@@ -736,7 +715,7 @@ impl LocomotionPolicyRuntime {
             policy_inference_ms = None;
             packet = None;
             command_packet = None;
-        } else if age_s > self.cfg.state_timeout_s {
+        } else if age_s > STATE_TIMEOUT_S {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
             flags |= ACTION_FLAG_TIMEOUT;
@@ -1171,20 +1150,6 @@ impl LocomotionPolicyRuntime {
     }
 }
 
-fn validate_policy_config(cfg: &LocomotionPolicyConfig) -> Result<(), LocomotionPolicyError> {
-    validate_duration_s("state_timeout_s", cfg.state_timeout_s)?;
-    validate_duration_s("write_timeout_s", cfg.write_timeout_s)?;
-    Ok(())
-}
-
-fn validate_duration_s(name: &'static str, value: f64) -> Result<Duration, LocomotionPolicyError> {
-    if !value.is_finite() || value < 0.0 {
-        return Err(LocomotionPolicyError::InvalidDuration { name, value });
-    }
-    Duration::try_from_secs_f64(value)
-        .map_err(|_| LocomotionPolicyError::InvalidDuration { name, value })
-}
-
 fn write_step_output_packets<F, E>(
     command_packet: Option<&[u8]>,
     packet: Option<&[u8]>,
@@ -1529,8 +1494,8 @@ fn runtime_config_json(cfg: &LocomotionPolicyConfig) -> serde_json::Value {
         "baudrate": cfg.baudrate,
         "device": cfg.device,
         "rate_hz": LOCOMOTION_POLICY_RATE_HZ,
-        "state_timeout_s": cfg.state_timeout_s,
-        "write_timeout_s": cfg.write_timeout_s,
+        "state_timeout_s": STATE_TIMEOUT_S,
+        "write_timeout_s": WRITE_TIMEOUT_S,
         "max_steps": cfg.max_steps,
         "dry_run": cfg.dry_run,
         "print_every": cfg.print_every,
@@ -1782,24 +1747,6 @@ mod tests {
                 pair[0] == crate::protocol::MSG_COMMAND && pair[1] == crate::protocol::MSG_TARGET
             }),
             "expected command packet followed by target packet, got {messages:?}",
-        );
-    }
-
-    #[test]
-    fn run_rejects_invalid_duration_config() {
-        let mut runtime = test_runtime_without_policy();
-        runtime.cfg.dry_run = true;
-        runtime.cfg.write_timeout_s = f64::INFINITY;
-        let err = runtime.run().unwrap_err();
-        assert!(
-            matches!(
-                err,
-                LocomotionPolicyError::InvalidDuration {
-                    name: "write_timeout_s",
-                    value
-                } if value.is_infinite()
-            ),
-            "unexpected error: {err}",
         );
     }
 
