@@ -55,15 +55,6 @@ struct Args {
     #[arg(long, default_value = "auto")]
     device: String,
 
-    #[arg(long = "rate-hz")]
-    rate_hz: Option<f64>,
-
-    #[arg(long = "state-timeout-s")]
-    state_timeout_s: Option<f64>,
-
-    #[arg(long = "write-timeout-s")]
-    write_timeout_s: Option<f64>,
-
     #[arg(long = "max-steps", default_value_t = 0)]
     max_steps: usize,
 
@@ -135,13 +126,6 @@ fn run_main() -> Result<(), Box<dyn Error>> {
             .unwrap_or_else(|| robot.locomotion.sim_client_socket_path.clone()),
         baudrate: args.baudrate,
         device: args.device,
-        rate_hz: args.rate_hz.unwrap_or(robot.locomotion.rate_hz),
-        state_timeout_s: args
-            .state_timeout_s
-            .unwrap_or(robot.locomotion.state_timeout_s),
-        write_timeout_s: args
-            .write_timeout_s
-            .unwrap_or(robot.locomotion.write_timeout_s),
         max_steps: args.max_steps,
         dry_run: args.dry_run,
         print_every: args.print_every,
