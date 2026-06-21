@@ -27,6 +27,7 @@ use crate::protocol::{
 
 pub const DEFAULT_CDC_PORT: &str = "auto";
 pub const CDC_RECONNECT_DELAY_S: f64 = 1.0;
+pub const LOCOMOTION_POLICY_RATE_HZ: f64 = 50.0;
 pub const TELEMETRY_SCHEMA: &str = "se3_locomotion_telemetry";
 pub const ACTION_FLAG_DRY_RUN: u32 = 1 << 0;
 pub const ACTION_FLAG_TIMEOUT: u32 = 1 << 1;
@@ -46,6 +47,10 @@ pub enum LocomotionPolicyError {
     PolicyIo(#[from] PolicyIoError),
     #[error("unsupported checkpoint type: {0}")]
     UnsupportedCheckpoint(PathBuf),
+    #[error(
+        "invalid locomotion policy config: {name} must be a finite non-negative duration, got {value}"
+    )]
+    InvalidDuration { name: &'static str, value: f64 },
     #[error("sim transport failed to bind client socket {client_socket_path}")]
     SimSocketBind {
         client_socket_path: PathBuf,
@@ -87,7 +92,6 @@ pub struct LocomotionPolicyConfig {
     pub sim_client_socket_path: PathBuf,
     pub baudrate: i32,
     pub device: String,
-    pub rate_hz: f64,
     pub state_timeout_s: f64,
     pub write_timeout_s: f64,
     pub max_steps: usize,
@@ -117,7 +121,6 @@ impl Default for LocomotionPolicyConfig {
             sim_client_socket_path: PathBuf::from("/tmp/se3_locomotion.sock"),
             baudrate: 921600,
             device: "auto".to_string(),
-            rate_hz: 50.0,
             state_timeout_s: 0.10,
             write_timeout_s: 0.02,
             max_steps: 0,
@@ -258,6 +261,7 @@ impl LocomotionPolicyRuntime {
         cfg: LocomotionPolicyConfig,
         command_source: Box<dyn RuntimeCommandSource>,
     ) -> Result<Self, LocomotionPolicyError> {
+        validate_policy_config(&cfg)?;
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
         policy.reset();
@@ -341,6 +345,7 @@ impl LocomotionPolicyRuntime {
     }
 
     pub fn run(&mut self) -> Result<RuntimeStats, LocomotionPolicyError> {
+        validate_policy_config(&self.cfg)?;
         info!(
             "Locomotion policy runtime: checkpoint={} iter={} type={} device={}",
             self.cfg.checkpoint.display(),
@@ -364,7 +369,7 @@ impl LocomotionPolicyRuntime {
         let max_steps = if self.cfg.max_steps > 0 {
             self.cfg.max_steps
         } else {
-            (self.cfg.rate_hz * 2.0) as usize
+            (LOCOMOTION_POLICY_RATE_HZ * 2.0) as usize
         };
         for step in 0..max_steps {
             let loop_started = Instant::now();
@@ -410,7 +415,8 @@ impl LocomotionPolicyRuntime {
 
     fn run_sim(&mut self) -> Result<(), LocomotionPolicyError> {
         let max_steps = self.cfg.max_steps;
-        let period_s = 1.0 / self.cfg.rate_hz;
+        let period = Duration::from_secs_f64(1.0 / LOCOMOTION_POLICY_RATE_HZ);
+        let period_s = period.as_secs_f64();
         self.sim_fourbar_surrogate = true;
         let state_timeout =
             Duration::try_from_secs_f64(self.cfg.state_timeout_s).map_err(|err| {
@@ -457,12 +463,12 @@ impl LocomotionPolicyRuntime {
         let mut buf = [0_u8; 4096];
         let mut latest_state: Option<PolicyStateFrame> = None;
         let mut latest_state_time = Instant::now();
-        let mut next_tick = Instant::now() + Duration::from_secs_f64(period_s);
+        let mut next_tick = Instant::now() + period;
         while max_steps == 0 || self.stats.steps < max_steps {
             let loop_started = Instant::now();
             let now = Instant::now();
             if now >= next_tick {
-                next_tick += Duration::from_secs_f64(period_s);
+                next_tick += period;
                 let Some(state) = latest_state.as_ref() else {
                     self.stats.steps += 1;
                     self.stats.timeout_frames += 1;
@@ -481,12 +487,11 @@ impl LocomotionPolicyRuntime {
                     command_packet,
                 } = self.step_from_state(state, age_s)?;
                 let write_started = Instant::now();
-                if let Some(command_packet) = command_packet {
-                    socket.send(&command_packet)?;
-                }
-                if let Some(packet) = packet {
-                    socket.send(&packet)?;
-                }
+                write_step_output_packets(
+                    command_packet.as_deref(),
+                    packet.as_deref(),
+                    |packet| socket.send(packet).map(|_| ()),
+                )?;
                 let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                 self.record_action(state, action, flags, policy_inference_ms);
                 self.write_telemetry(
@@ -554,7 +559,8 @@ impl LocomotionPolicyRuntime {
 
     fn run_cdc(&mut self) -> Result<(), LocomotionPolicyError> {
         let max_steps = self.cfg.max_steps;
-        let period_s = 1.0 / self.cfg.rate_hz;
+        let period = Duration::from_secs_f64(1.0 / LOCOMOTION_POLICY_RATE_HZ);
+        let period_s = period.as_secs_f64();
         self.sim_fourbar_surrogate = false;
 
         while max_steps == 0 || self.stats.steps < max_steps {
@@ -599,7 +605,7 @@ impl LocomotionPolicyRuntime {
                     if now < next_tick {
                         continue;
                     }
-                    next_tick += Duration::from_secs_f64(period_s);
+                    next_tick += period;
                     let Some(state) = latest_state.as_ref() else {
                         self.stats.steps += 1;
                         self.maybe_print();
@@ -614,12 +620,14 @@ impl LocomotionPolicyRuntime {
                         obs,
                         policy_inference_ms,
                         packet,
-                        command_packet: _,
+                        command_packet,
                     } = self.step_from_state(state, age_s)?;
                     let write_started = Instant::now();
-                    if let Some(packet) = packet {
-                        serial.write_all(&packet, self.cfg.write_timeout_s)?;
-                    }
+                    write_step_output_packets(
+                        command_packet.as_deref(),
+                        packet.as_deref(),
+                        |packet| serial.write_all(packet, self.cfg.write_timeout_s),
+                    )?;
                     let write_ms = write_started.elapsed().as_secs_f64() * 1000.0;
                     self.record_action(state, action, flags, policy_inference_ms);
                     self.write_telemetry(
@@ -963,10 +971,10 @@ impl LocomotionPolicyRuntime {
             json!(timing.state_age_s.map(|v| v * 1000.0)),
         );
         record.insert("write_ms".to_string(), json!(timing.write_ms));
-        record.insert("rate_hz".to_string(), json!(self.cfg.rate_hz));
+        record.insert("rate_hz".to_string(), json!(LOCOMOTION_POLICY_RATE_HZ));
         record.insert(
             "sample_period_ms".to_string(),
-            json!(1000.0 / self.cfg.rate_hz),
+            json!(1000.0 / LOCOMOTION_POLICY_RATE_HZ),
         );
         record.insert("step".to_string(), json!(self.stats.steps));
         record.insert("state_seq".to_string(), json!(state.seq));
@@ -1161,6 +1169,37 @@ impl LocomotionPolicyRuntime {
             fmt_values(&self.stats.last_state_wheel_motor_torque),
         );
     }
+}
+
+fn validate_policy_config(cfg: &LocomotionPolicyConfig) -> Result<(), LocomotionPolicyError> {
+    validate_duration_s("state_timeout_s", cfg.state_timeout_s)?;
+    validate_duration_s("write_timeout_s", cfg.write_timeout_s)?;
+    Ok(())
+}
+
+fn validate_duration_s(name: &'static str, value: f64) -> Result<Duration, LocomotionPolicyError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(LocomotionPolicyError::InvalidDuration { name, value });
+    }
+    Duration::try_from_secs_f64(value)
+        .map_err(|_| LocomotionPolicyError::InvalidDuration { name, value })
+}
+
+fn write_step_output_packets<F, E>(
+    command_packet: Option<&[u8]>,
+    packet: Option<&[u8]>,
+    mut write: F,
+) -> Result<(), E>
+where
+    F: FnMut(&[u8]) -> Result<(), E>,
+{
+    if let Some(command_packet) = command_packet {
+        write(command_packet)?;
+    }
+    if let Some(packet) = packet {
+        write(packet)?;
+    }
+    Ok(())
 }
 
 pub fn load_policy_runtime(
@@ -1489,7 +1528,7 @@ fn runtime_config_json(cfg: &LocomotionPolicyConfig) -> serde_json::Value {
         "sim_client_socket_path": cfg.sim_client_socket_path,
         "baudrate": cfg.baudrate,
         "device": cfg.device,
-        "rate_hz": cfg.rate_hz,
+        "rate_hz": LOCOMOTION_POLICY_RATE_HZ,
         "state_timeout_s": cfg.state_timeout_s,
         "write_timeout_s": cfg.write_timeout_s,
         "max_steps": cfg.max_steps,
@@ -1649,6 +1688,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn target_decoder_matches_python_reference() {
@@ -1715,6 +1757,53 @@ mod tests {
     }
 
     #[test]
+    fn cdc_transport_writes_command_packet_before_target_packet() {
+        let (master_fd, slave_path) = open_pty_pair();
+        let mut state = synthetic_default_state(21);
+        state.output_enabled = 0;
+        let state_packet = crate::protocol::pack_policy_state(&state).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let reader =
+            std::thread::spawn(move || collect_cdc_output(master_fd, state_packet, reader_stop));
+
+        let mut runtime = test_runtime_without_policy();
+        runtime.cfg.transport = LocomotionTransport::Cdc;
+        runtime.cfg.port = slave_path;
+        runtime.cfg.baudrate = 115200;
+        runtime.cfg.max_steps = 2;
+        runtime.cfg.print_every = 0;
+        runtime.run_cdc().unwrap();
+
+        stop.store(true, Ordering::Relaxed);
+        let messages = reader.join().unwrap();
+        assert!(
+            messages.windows(2).any(|pair| {
+                pair[0] == crate::protocol::MSG_COMMAND && pair[1] == crate::protocol::MSG_TARGET
+            }),
+            "expected command packet followed by target packet, got {messages:?}",
+        );
+    }
+
+    #[test]
+    fn run_rejects_invalid_duration_config() {
+        let mut runtime = test_runtime_without_policy();
+        runtime.cfg.dry_run = true;
+        runtime.cfg.write_timeout_s = f64::INFINITY;
+        let err = runtime.run().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LocomotionPolicyError::InvalidDuration {
+                    name: "write_timeout_s",
+                    value
+                } if value.is_infinite()
+            ),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn unlink_socket_path_refuses_regular_file() {
         let path = std::env::temp_dir().join(format!(
             "se3_regular_{}_{}",
@@ -1726,6 +1815,71 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(path.exists());
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn open_pty_pair() -> (libc::c_int, String) {
+        let mut master_fd: libc::c_int = -1;
+        let mut slave_fd: libc::c_int = -1;
+        let mut name = [0 as libc::c_char; 128];
+        let rc = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                name.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+        let slave_path = unsafe { CStr::from_ptr(name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !slave_path.is_empty(),
+            "openpty did not return a slave path"
+        );
+        let close_rc = unsafe { libc::close(slave_fd) };
+        assert_eq!(
+            close_rc,
+            0,
+            "close slave fd failed: {}",
+            std::io::Error::last_os_error()
+        );
+        (master_fd, slave_path)
+    }
+
+    fn collect_cdc_output(
+        master_fd: libc::c_int,
+        state_packet: Vec<u8>,
+        stop: Arc<AtomicBool>,
+    ) -> Vec<u8> {
+        let mut parser = StreamParser::default();
+        let mut message_types = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+            let _ =
+                unsafe { libc::write(master_fd, state_packet.as_ptr().cast(), state_packet.len()) };
+            let mut poll_fd = libc::pollfd {
+                fd: master_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let rc = unsafe { libc::poll(&mut poll_fd, 1, 20) };
+            if rc > 0 && poll_fd.revents & libc::POLLIN != 0 {
+                let mut buf = [0_u8; 4096];
+                let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n > 0 {
+                    message_types.extend(
+                        parser
+                            .feed(&buf[..n as usize])
+                            .into_iter()
+                            .map(|message| message.msg_type),
+                    );
+                }
+            }
+        }
+        let _ = unsafe { libc::close(master_fd) };
+        message_types
     }
 
     fn test_runtime_without_policy() -> LocomotionPolicyRuntime {
