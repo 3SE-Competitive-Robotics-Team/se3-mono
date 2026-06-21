@@ -654,8 +654,14 @@ impl LocomotionPolicyRuntime {
             flag_names.join(",")
         };
         let target_mode = target_mode_name(self.stats.last_action_flags);
+        let command = self.obs_builder.policy_command();
+        let command_device_id = self
+            .last_command_sample
+            .device_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "--".to_string());
         info!(
-            "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
+            "step={} states={} actions={} last_state={} timeouts={} nonfinite={} mode={} output={} flags={} cmd_src={} cmd_active={} cmd_dev={} cmd_h={:+.3} cmd_roll={:+.3} cmd_vx={:+.3} cmd_yaw={:+.3} cmd_jump={} cmd_jump_h={:+.3} fps={:.1}/{:.1} policy_ms={}/{:.3}/{:.3} policy_n={} action4=[{}] target4=[{}] stm_target4=[{}] joint4=[{}] err4=[{}] torque4=[{}] wheel_motor_torque=[{}]",
             self.stats.steps,
             self.stats.state_frames,
             self.stats.action_frames,
@@ -665,6 +671,15 @@ impl LocomotionPolicyRuntime {
             target_mode,
             self.stats.last_state_output_enabled,
             flags_text,
+            self.last_command_sample.source.as_str(),
+            self.last_command_sample.active,
+            command_device_id,
+            command[4],
+            command[3],
+            command[0],
+            command[1],
+            command[5] > 0.5,
+            command[6],
             recent_fps,
             avg_fps,
             policy_ms,

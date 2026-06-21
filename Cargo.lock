@@ -2606,6 +2606,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "debug_gamepad_command"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "log",
+ "se3_command",
+ "se3_input",
+ "se3_log",
+ "zoo",
+]
+
+[[package]]
 name = "der"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
