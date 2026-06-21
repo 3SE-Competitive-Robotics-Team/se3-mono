@@ -386,7 +386,7 @@ mod tests {
         let mut cloned = get_robot("serial_leg_dev").unwrap();
         cloned.locomotion.sim_client_socket_path = PathBuf::from("/tmp/other.sock");
         cloned.locomotion.robot_cfg.leg_kp = 75.0;
-        cloned.policies[0].ort_ep = "auto".to_string();
+        cloned.policies[0].ort_ep = "cpu".to_string();
         cloned.policies[0].action_decoder_profile.robot_cfg.leg_kp = 12.0;
 
         let fresh = get_robot("serial_leg_dev").unwrap();

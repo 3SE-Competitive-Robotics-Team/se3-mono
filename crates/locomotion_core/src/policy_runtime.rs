@@ -1825,6 +1825,29 @@ mod tests {
                 }
             }
         }
+        // Final drain: read any remaining bytes that were written before the
+        // stop signal but not yet consumed by the polling loop.
+        loop {
+            let mut poll_fd = libc::pollfd {
+                fd: master_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut poll_fd, 1, 0) } <= 0 {
+                break;
+            }
+            let mut buf = [0_u8; 4096];
+            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n <= 0 {
+                break;
+            }
+            message_types.extend(
+                parser
+                    .feed(&buf[..n as usize])
+                    .into_iter()
+                    .map(|message| message.msg_type),
+            );
+        }
         let _ = unsafe { libc::close(master_fd) };
         message_types
     }
