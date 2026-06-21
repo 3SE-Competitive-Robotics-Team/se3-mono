@@ -2,7 +2,7 @@
 
 ## 状态
 
-设计草案。本文定义机器人上 SE3 运行时代码、配置、日志、模型和原生动态库的放置方式。当前进程包括 `control` 和 `auto_aim`，后续会增加 `nav`（导航）。ONNX Runtime 是当前最具体的例子，后续相机 SDK、NPU SDK、TensorRT 插件和其他 `.so` 也按同一套规则管理。
+设计草案。本文定义机器人上 SE3 运行时代码、配置、日志、模型和原生动态库的放置方式。当前仓库里的运行时进程包括 `auto_aim` 和 `locomotion`；设计上仍保留后续 `control`、`nav`（导航）等进程扩展空间。ONNX Runtime 是当前最具体的例子，后续相机 SDK、NPU SDK、TensorRT 插件和其他 `.so` 也按同一套规则管理。
 
 ## 要解决的问题
 
@@ -41,6 +41,7 @@ SE3 在机器人上的默认安装前缀是：
   bin/
     control
     auto_aim
+    locomotion
   lib/
     onnxruntime -> onnxruntime-1.24.2
     onnxruntime-1.24.2/
@@ -56,11 +57,13 @@ SE3 在机器人上的默认安装前缀是：
     systemd/
       se3-control.service
       se3-auto-aim.service
+      se3-locomotion.service
 
 /etc/opt/se3/
   env/
     control.env
     auto_aim.env
+    locomotion.env
   rbt_cfg.local.toml
 
 /var/opt/se3/
@@ -146,7 +149,7 @@ SE3 的默认配置（`rbt_cfg.toml`）随部署包放在：
     policy.onnx
 ```
 
-日志优先交给 systemd journal。需要落盘文件时，写到：
+日志优先交给 systemd journal。Rust 运行时通过 `se3_log` 统一初始化文件日志：默认开发环境写仓库根目录 `log/`，如果部署机上存在 `/var/opt/se3/logs` 则写到部署日志目录，也可以用 `SE3_LOG_DIR` 显式覆盖。需要落盘文件时，目标目录是：
 
 ```text
 /var/opt/se3/logs/
@@ -186,6 +189,7 @@ ORT_DYLIB_PATH=/opt/se3/lib/onnxruntime/lib/libonnxruntime.so
 ```bash
 test -x /opt/se3/bin/control
 test -x /opt/se3/bin/auto_aim
+test -x /opt/se3/bin/locomotion
 test -f /opt/se3/lib/onnxruntime/lib/libonnxruntime.so
 test -f /opt/se3/cfg/rbt_cfg.toml
 ```
@@ -223,6 +227,7 @@ ORT_DYLIB_PATH=/opt/se3/lib/onnxruntime/lib/libonnxruntime.so
 ```bash
 test -x /opt/se3/bin/control
 test -x /opt/se3/bin/auto_aim
+test -x /opt/se3/bin/locomotion
 test -f /opt/se3/lib/onnxruntime/lib/libonnxruntime.so
 test -f /opt/se3/cfg/rbt_cfg.toml
 test -d /opt/se3/models
