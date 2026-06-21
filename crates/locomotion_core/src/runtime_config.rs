@@ -25,6 +25,15 @@ pub enum LocomotionPolicyError {
     PolicyIo(#[from] PolicyIoError),
     #[error("unsupported checkpoint type: {0}")]
     UnsupportedCheckpoint(PathBuf),
+    #[error(
+        "ONNX checkpoint metadata mismatch: checkpoint `{checkpoint_path}` has {onnx_value} {field} but config expects {config_value}"
+    )]
+    CheckpointMetadataMismatch {
+        checkpoint_path: PathBuf,
+        field: &'static str,
+        onnx_value: String,
+        config_value: String,
+    },
     #[error("sim transport failed to bind client socket {client_socket_path}")]
     SimSocketBind {
         client_socket_path: PathBuf,

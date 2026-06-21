@@ -109,6 +109,7 @@ impl LocomotionPolicyRuntime {
     ) -> Result<Self, LocomotionPolicyError> {
         let obs_cfg = ObservationConfig::default();
         let mut policy = load_policy_runtime(&cfg.checkpoint, &cfg.ort_ep)?;
+        validate_checkpoint_metadata(&policy, &obs_cfg, &cfg.checkpoint)?;
         policy.reset();
         let initial_command = LocomotionCommand::from_command(cfg.fixed_command, &cfg.robot_cfg);
         let mut obs_builder =
@@ -698,6 +699,29 @@ where
     if let Some(packet) = packet {
         write(packet)?;
     }
+    Ok(())
+}
+
+fn validate_checkpoint_metadata(
+    policy: &LoadedPolicy,
+    obs_cfg: &ObservationConfig,
+    checkpoint: &Path,
+) -> Result<(), LocomotionPolicyError> {
+    let check = |field: &'static str, onnx_value: usize, config_value: usize| {
+        if onnx_value != config_value {
+            Err(LocomotionPolicyError::CheckpointMetadataMismatch {
+                checkpoint_path: checkpoint.to_path_buf(),
+                field,
+                onnx_value: onnx_value.to_string(),
+                config_value: config_value.to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    };
+    // num_obs is validated at runtime by the observation builder; only
+    // num_actions must match because the action decoder has a fixed layout.
+    check("num_actions", policy.num_actions(), obs_cfg.num_actions)?;
     Ok(())
 }
 
