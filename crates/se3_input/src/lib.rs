@@ -96,8 +96,14 @@ impl GamepadInput {
             right_stick_y: axis(&gamepad, Axis::RightStickY),
             left_trigger: trigger(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
             right_trigger: trigger(&gamepad, Axis::RightZ, Button::RightTrigger2),
-            dpad_x: dpad_axis(&gamepad, Axis::DPadX, Button::DPadRight, Button::DPadLeft),
-            dpad_y: dpad_axis(&gamepad, Axis::DPadY, Button::DPadUp, Button::DPadDown),
+            dpad_x: dpad_button_axis(
+                gamepad.is_pressed(Button::DPadRight),
+                gamepad.is_pressed(Button::DPadLeft),
+            ),
+            dpad_y: dpad_button_axis(
+                gamepad.is_pressed(Button::DPadUp),
+                gamepad.is_pressed(Button::DPadDown),
+            ),
             south: gamepad.is_pressed(Button::South),
             east: gamepad.is_pressed(Button::East),
             north: gamepad.is_pressed(Button::North),
@@ -173,23 +179,7 @@ fn axis(gamepad: &gilrs::Gamepad<'_>, axis_name: Axis) -> f32 {
         .clamp(-1.0, 1.0)
 }
 
-fn dpad_axis(
-    gamepad: &gilrs::Gamepad<'_>,
-    axis_name: Axis,
-    positive_button: Button,
-    negative_button: Button,
-) -> f32 {
-    dpad_axis_value(
-        axis(gamepad, axis_name),
-        gamepad.is_pressed(positive_button),
-        gamepad.is_pressed(negative_button),
-    )
-}
-
-fn dpad_axis_value(axis_value: f32, positive_pressed: bool, negative_pressed: bool) -> f32 {
-    if axis_value.abs() > 1.0e-5 {
-        return axis_value;
-    }
+fn dpad_button_axis(positive_pressed: bool, negative_pressed: bool) -> f32 {
     match (positive_pressed, negative_pressed) {
         (true, false) => 1.0,
         (false, true) => -1.0,
@@ -246,16 +236,10 @@ mod tests {
     }
 
     #[test]
-    fn dpad_axis_falls_back_to_buttons_when_axis_is_neutral() {
-        assert_eq!(dpad_axis_value(0.0, true, false), 1.0);
-        assert_eq!(dpad_axis_value(0.0, false, true), -1.0);
-        assert_eq!(dpad_axis_value(0.0, true, true), 0.0);
-        assert_eq!(dpad_axis_value(0.0, false, false), 0.0);
-    }
-
-    #[test]
-    fn dpad_axis_prefers_non_neutral_axis_value() {
-        assert_eq!(dpad_axis_value(1.0, false, true), 1.0);
-        assert_eq!(dpad_axis_value(-1.0, true, false), -1.0);
+    fn dpad_button_axis_maps_opposing_buttons_to_direction() {
+        assert_eq!(dpad_button_axis(true, false), 1.0);
+        assert_eq!(dpad_button_axis(false, true), -1.0);
+        assert_eq!(dpad_button_axis(true, true), 0.0);
+        assert_eq!(dpad_button_axis(false, false), 0.0);
     }
 }
