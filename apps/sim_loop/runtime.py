@@ -117,6 +117,8 @@ class SimLoopRuntime:
                         )
                         try:
                             self._socket.sendto(pack_policy_state(state), peer_path)
+                        except ValueError as exc:
+                            print(f"drop state: {exc}")
                         except OSError as exc:
                             print(f"drop state: {exc}")
                             with self._lock:

@@ -1,8 +1,11 @@
 import struct
+from math import inf, nan
 
 from sim_loop.protocol import (
+    MSG_COMMAND,
     MSG_STATE,
     MSG_TARGET,
+    POLICY_COMMAND_PAYLOAD_SIZE,
     POLICY_STATE_PAYLOAD_SIZE,
     SOF,
     VERSION,
@@ -11,6 +14,7 @@ from sim_loop.protocol import (
     crc16,
     pack_policy_state,
     pack_policy_target,
+    unpack_policy_command,
     unpack_policy_state,
     unpack_policy_target,
 )
@@ -103,3 +107,67 @@ def test_unpack_state_rejects_wrong_payload_length_as_value_error() -> None:
         assert "payload length" in str(exc)
     else:
         raise AssertionError("wrong state payload length should be rejected")
+
+
+def test_pack_target_rejects_non_finite_values() -> None:
+    try:
+        pack_policy_target(PolicyTargetFrame(1, (nan, 0.0, 0.0, 0.0), (0.0, 0.0)))
+    except ValueError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite target values should be rejected")
+
+
+def test_unpack_target_rejects_non_finite_values() -> None:
+    payload = struct.pack("<I4f2f", 1, inf, 0.0, 0.0, 0.0, 0.0, 0.0)
+    header = struct.pack("<2sBBHH", SOF, MSG_TARGET, VERSION, len(payload), 1)
+    packet = header + payload
+    packet += crc16(packet).to_bytes(2, "little")
+    try:
+        unpack_policy_target(packet)
+    except ValueError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite target values should be rejected")
+
+
+def test_unpack_command_rejects_non_finite_values() -> None:
+    assert struct.calcsize("<I8f") == POLICY_COMMAND_PAYLOAD_SIZE
+    payload = struct.pack("<I8f", 1, 0.0, 0.0, 0.0, 0.0, nan, 0.0, 0.0, 0.0)
+    header = struct.pack("<2sBBHH", SOF, MSG_COMMAND, VERSION, len(payload), 1)
+    packet = header + payload
+    packet += crc16(packet).to_bytes(2, "little")
+    try:
+        unpack_policy_command(packet)
+    except ValueError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite command values should be rejected")
+
+
+def test_pack_state_rejects_non_finite_values() -> None:
+    frame = PolicyStateFrame(
+        seq=42,
+        tick_ms=840,
+        target_seq=41,
+        target_age_ms=20,
+        target_valid=1,
+        rc_switch_r=1,
+        output_enabled=1,
+        base_ang_vel_body=(0.125, 0.25, 0.5),
+        projected_gravity=(0.0, 0.0, -1.0),
+        joint_pos=(1.0, 2.0, 3.0, 4.0),
+        joint_vel=(5.0, 6.0, 7.0, 8.0),
+        wheel_pos=(9.0, 10.0),
+        wheel_vel=(11.0, 12.0),
+        target_joint_pos=(13.0, 14.0, 15.0, 16.0),
+        hip_torque=(17.0, 18.0, 19.0, 20.0),
+        wheel_torque=(21.0, inf),
+        wheel_motor_torque=(23.0, 24.0),
+    )
+    try:
+        pack_policy_state(frame)
+    except ValueError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite state values should be rejected")
