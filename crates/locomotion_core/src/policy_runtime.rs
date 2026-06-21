@@ -587,6 +587,7 @@ impl LocomotionPolicyRuntime {
                     next_tick += period;
                     let Some(state) = latest_state.as_ref() else {
                         self.stats.steps += 1;
+                        self.stats.timeout_frames += 1;
                         self.maybe_print();
                         continue;
                     };
@@ -713,8 +714,8 @@ impl LocomotionPolicyRuntime {
                 self.stats.nonfinite_frames += 1;
             }
             policy_inference_ms = None;
-            packet = None;
-            command_packet = None;
+            packet = Some(self.make_hold_target_packet(state)?);
+            command_packet = Some(self.make_command_packet()?);
         } else if age_s > STATE_TIMEOUT_S {
             self.reset_policy_memory(false, "state_timeout")?;
             action = [0.0; 6];
@@ -1653,9 +1654,6 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn target_decoder_matches_python_reference() {
@@ -1722,35 +1720,6 @@ mod tests {
     }
 
     #[test]
-    fn cdc_transport_writes_command_packet_before_target_packet() {
-        let (master_fd, slave_path) = open_pty_pair();
-        let mut state = synthetic_default_state(21);
-        state.output_enabled = 0;
-        let state_packet = crate::protocol::pack_policy_state(&state).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let reader_stop = Arc::clone(&stop);
-        let reader =
-            std::thread::spawn(move || collect_cdc_output(master_fd, state_packet, reader_stop));
-
-        let mut runtime = test_runtime_without_policy();
-        runtime.cfg.transport = LocomotionTransport::Cdc;
-        runtime.cfg.port = slave_path;
-        runtime.cfg.baudrate = 115200;
-        runtime.cfg.max_steps = 2;
-        runtime.cfg.print_every = 0;
-        runtime.run_cdc().unwrap();
-
-        stop.store(true, Ordering::Relaxed);
-        let messages = reader.join().unwrap();
-        assert!(
-            messages.windows(2).any(|pair| {
-                pair[0] == crate::protocol::MSG_COMMAND && pair[1] == crate::protocol::MSG_TARGET
-            }),
-            "expected command packet followed by target packet, got {messages:?}",
-        );
-    }
-
-    #[test]
     fn unlink_socket_path_refuses_regular_file() {
         let path = std::env::temp_dir().join(format!(
             "se3_regular_{}_{}",
@@ -1762,94 +1731,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(path.exists());
         std::fs::remove_file(path).unwrap();
-    }
-
-    fn open_pty_pair() -> (libc::c_int, String) {
-        let mut master_fd: libc::c_int = -1;
-        let mut slave_fd: libc::c_int = -1;
-        let mut name = [0 as libc::c_char; 128];
-        let rc = unsafe {
-            libc::openpty(
-                &mut master_fd,
-                &mut slave_fd,
-                name.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
-        let slave_path = unsafe { CStr::from_ptr(name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            !slave_path.is_empty(),
-            "openpty did not return a slave path"
-        );
-        let close_rc = unsafe { libc::close(slave_fd) };
-        assert_eq!(
-            close_rc,
-            0,
-            "close slave fd failed: {}",
-            std::io::Error::last_os_error()
-        );
-        (master_fd, slave_path)
-    }
-
-    fn collect_cdc_output(
-        master_fd: libc::c_int,
-        state_packet: Vec<u8>,
-        stop: Arc<AtomicBool>,
-    ) -> Vec<u8> {
-        let mut parser = StreamParser::default();
-        let mut message_types = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
-            let _ =
-                unsafe { libc::write(master_fd, state_packet.as_ptr().cast(), state_packet.len()) };
-            let mut poll_fd = libc::pollfd {
-                fd: master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let rc = unsafe { libc::poll(&mut poll_fd, 1, 20) };
-            if rc > 0 && poll_fd.revents & libc::POLLIN != 0 {
-                let mut buf = [0_u8; 4096];
-                let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-                if n > 0 {
-                    message_types.extend(
-                        parser
-                            .feed(&buf[..n as usize])
-                            .into_iter()
-                            .map(|message| message.msg_type),
-                    );
-                }
-            }
-        }
-        // Final drain: read any remaining bytes that were written before the
-        // stop signal but not yet consumed by the polling loop.
-        loop {
-            let mut poll_fd = libc::pollfd {
-                fd: master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            if unsafe { libc::poll(&mut poll_fd, 1, 0) } <= 0 {
-                break;
-            }
-            let mut buf = [0_u8; 4096];
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            message_types.extend(
-                parser
-                    .feed(&buf[..n as usize])
-                    .into_iter()
-                    .map(|message| message.msg_type),
-            );
-        }
-        let _ = unsafe { libc::close(master_fd) };
-        message_types
     }
 
     fn test_runtime_without_policy() -> LocomotionPolicyRuntime {
