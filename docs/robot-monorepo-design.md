@@ -209,17 +209,17 @@ tracing-subscriber = "0.3"
 
 ## 进程划分
 
-### `apps/control`
+### `apps/locomotion`
 
-`control` 是运动控制进程。它负责：
+`locomotion` 是运动控制进程。它负责：
 
-- 读取机器人配置。
-- 初始化底盘、云台、发射机构、遥控器或裁判系统输入。
-- 接收上层速度、姿态、目标点或模式命令。
-- 输出电机控制、云台控制和发射控制。
-- 上报机器人运动状态、故障状态和关键 telemetry。
+- 读取机器人配置，加载 ONNX 策略模型。
+- 通过 USB CDC 与 STM32 电机控制器通信（或通过 Unix socket 与 sim_loop 仿真通信）。
+- 以固定 50 Hz 频率运行策略推理闭环：接收传感器状态帧 → 策略推理 → 解码动作 → 发送关节目标值。
+- 上报运动状态、策略统计和关键 telemetry。
+- 支持 `--dry-run` 模式（无硬件推理仅用于冒烟测试和 benchmark）。
 
-`control` 不应该包含自瞄图像处理逻辑。它可以接收 `auto_strike` 输出的云台角速度、目标姿态或开火请求，但不关心这些目标是怎么识别出来的。
+`locomotion` 不包含自瞄图像处理逻辑。
 
 ### `apps/auto_strike`
 
@@ -229,14 +229,25 @@ tracing-subscriber = "0.3"
 - 识别装甲板或目标。
 - 跟踪目标状态。
 - 解算云台目标角度、预测量和开火条件。
-- 向 `control` 发布瞄准请求或打击请求。
+- 向 `locomotion` 发布瞄准请求或打击请求。
 - 记录关键帧、检测结果、跟踪状态和延迟指标。
 
-`auto_strike` 不应该直接控制电机。它最多输出命令意图，由 `control` 根据机器人状态、模式和安全边界决定是否执行。
+`auto_strike` 不应该直接控制电机。它最多输出命令意图，由 `locomotion` 根据机器人状态、模式和安全边界决定是否执行。
 
 ### `apps/nav`
 
-`nav` 暂时作为未来进程预留。它负责导航、路径规划、定位融合和目标点选择。`nav` 不应该直接驱动底盘，而是向 `control` 发布运动目标或速度请求。
+`nav` 暂时作为未来进程预留。它负责导航、路径规划、定位融合和目标点选择。`nav` 不应该直接驱动底盘，而是向 `locomotion` 发布运动目标或速度请求。
+
+### `apps/sim_loop`
+
+`sim_loop` 是 MuJoCo 物理仿真工具（Python 实现），用于在开发机上替代真实硬件进行 locomotion 策略闭环测试。
+
+- 加载机器人的 MJCF 模型，运行 PD 控制驱动虚拟关节。
+- 接收 Rust 侧发送的关节目标帧，物理步进后回传传感器状态帧。
+- 与 `apps/locomotion` 组成完整仿真闭环，无需物理机器人即可验证策略行为。
+- 支持 MuJoCo 原生渲染和 Rerun 可视化。
+- 通过 `zoo` crate 共享机器人模型定义（关节名、电机参数、MJCF 路径），不使用独立的配置来源。
+- `sim_loop` 是开发工具，不部署到机器人上。
 
 ## crate 边界
 
@@ -284,7 +295,7 @@ tracing-subscriber = "0.3"
 - 传感器状态融合。
 - 对 driver trait 的调用。
 
-`control_core` 不直接依赖具体硬件 crate。它依赖 trait，由 `apps/control` 组装具体实现。
+`locomotion_core` 不直接依赖具体硬件 crate。它依赖 trait，由 `apps/locomotion` 组装具体实现。
 
 ### `auto_strike_core`
 
@@ -303,7 +314,7 @@ tracing-subscriber = "0.3"
 推荐依赖方向如下：
 
 ```text
-apps/control
+apps/locomotion
   -> control_core
   -> se3_config
   -> se3_bus
@@ -329,7 +340,7 @@ drivers/*
 
 不推荐的依赖方向：
 
-- `control_core` 依赖 `apps/control`。
+- `control_core` 依赖 `apps/locomotion`。
 - `auto_strike_core` 依赖 `apps/auto_strike`。
 - `control_core` 直接依赖具体相机或串口 SDK。
 - `auto_strike_core` 直接控制电机。
@@ -411,7 +422,7 @@ pub trait TargetSelector {
 }
 ```
 
-`apps/control` 或 `apps/auto_strike` 根据配置组装具体实现：
+`apps/locomotion` 或 `apps/auto_strike` 根据配置组装具体实现：
 
 ```rust
 let config = se3_config::load_robot_config(args.robot)?;
@@ -1195,7 +1206,7 @@ robots/hero
 第一阶段只建最小可用结构：
 
 ```text
-apps/control
+apps/locomotion
 apps/auto_strike
 crates/se3_common
 crates/se3_config
