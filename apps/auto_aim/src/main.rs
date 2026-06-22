@@ -187,7 +187,7 @@ async fn main() -> RbtResult<()> {
         can_io_process(control_tx_queue, feedback_queue, cfg, runtime_completion);
 
     let tim = std::time::Instant::now();
-    let (_, _, _, _, _, _, _, _, _) = tokio::join!(
+    let (pre_result, _, _, _, _, _, _, _, _) = tokio::join!(
         pre_task_handler,
         infer_task_handler,
         post_task_handler,
@@ -198,6 +198,8 @@ async fn main() -> RbtResult<()> {
         control_task_handler,
         can_task_handler
     );
+    pre_result
+        .map_err(|err| RbtError::StringError(format!("pre_process task join failed: {err}")))??;
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await; // wait for post process to finish
     info!("multi_thread_pipeline finished in {:?}", tim.elapsed());
 
