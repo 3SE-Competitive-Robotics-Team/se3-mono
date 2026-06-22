@@ -8,12 +8,12 @@ use half::f16;
 
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
-use crate::rbt_infra::rbt_err::RbtResult;
+use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
 
-pub const LETTERBOX_PAD_VALUE: f32 = 0.0;
+pub const LETTERBOX_PAD_VALUE: f32 = 114.0 / 255.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LetterboxTransform {
@@ -59,13 +59,19 @@ pub fn preprocess_letterbox_f16(
     mut input_array: nd::ArrayViewMut4<'_, f16>,
     image: &image::DynamicImage,
 ) -> RbtResult<LetterboxTransform> {
-    input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
-
     let shape = input_array.shape();
+    if shape[0] != 1 || shape[1] != 3 {
+        return Err(RbtError::StringError(format!(
+            "YOLO letterbox expects input tensor shape [1,3,H,W], got {shape:?}"
+        )));
+    }
+
     let target_height = shape[2] as u32;
     let target_width = shape[3] as u32;
     let image_width = image.width();
     let image_height = image.height();
+
+    input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
 
     if target_width == 0 || target_height == 0 || image_width == 0 || image_height == 0 {
         return Ok(LetterboxTransform {
@@ -83,10 +89,10 @@ pub fn preprocess_letterbox_f16(
 
     let scale =
         (target_width as f32 / image_width as f32).min(target_height as f32 / image_height as f32);
-    let resized_width = ((image_width as f32 * scale).floor() as u32).clamp(1, target_width);
-    let resized_height = ((image_height as f32 * scale).floor() as u32).clamp(1, target_height);
-    let pad_x = 0;
-    let pad_y = 0;
+    let resized_width = ((image_width as f32 * scale).round() as u32).clamp(1, target_width);
+    let resized_height = ((image_height as f32 * scale).round() as u32).clamp(1, target_height);
+    let pad_x = ((target_width - resized_width) / 2) as usize;
+    let pad_y = ((target_height - resized_height) / 2) as usize;
 
     let rgb = image.to_rgb8();
     let mut resized = image::RgbImage::new(resized_width, resized_height);
@@ -95,8 +101,8 @@ pub fn preprocess_letterbox_f16(
     Resizer::new().resize(&rgb, &mut resized, Some(&resize_options))?;
 
     for (x, y, pixel) in resized.enumerate_pixels() {
-        let x_new = x as usize;
-        let y_new = y as usize;
+        let x_new = x as usize + pad_x;
+        let y_new = y as usize + pad_y;
         let [r, g, b] = pixel.0;
 
         input_array[[0, 0, y_new, x_new]] = f16::from_f32(r as f32 / 255.0);
@@ -523,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn letterbox_top_left_pads_black_and_normalizes_rgb() {
+    fn letterbox_centers_with_114_padding_and_normalizes_rgb() {
         let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([1, 2, 3, 255])));
         let mut input = nd::Array4::<f16>::zeros((1, 3, 4, 4));
 
@@ -545,9 +551,24 @@ mod tests {
 
         assert_eq!(transform.resized_width, 4);
         assert_eq!(transform.resized_height, 2);
+        assert_eq!(transform.pad_x, 0.0);
+        assert_eq!(transform.pad_y, 1.0);
+        assert!((padded[[0, 0, 0, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert!((padded[[0, 0, 1, 0]].to_f32() - 9.0 / 255.0).abs() < 0.001);
+        assert!((padded[[0, 0, 3, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+
+        let tall = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 4, Rgba([6, 5, 4, 255])));
+        let mut horizontal_padded = nd::Array4::<f16>::zeros((1, 3, 4, 4));
+        let transform = preprocess_letterbox_f16(horizontal_padded.view_mut(), &tall)
+            .expect("letterbox preprocessing should resize tall RGBA input via RGB conversion");
+
+        assert_eq!(transform.resized_width, 2);
+        assert_eq!(transform.resized_height, 4);
+        assert_eq!(transform.pad_x, 1.0);
         assert_eq!(transform.pad_y, 0.0);
-        assert!((padded[[0, 0, 0, 0]].to_f32() - 9.0 / 255.0).abs() < 0.001);
-        assert!((padded[[0, 0, 2, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert!((horizontal_padded[[0, 0, 0, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert!((horizontal_padded[[0, 0, 0, 1]].to_f32() - 6.0 / 255.0).abs() < 0.001);
+        assert!((horizontal_padded[[0, 0, 0, 3]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
     }
 
     #[test]
