@@ -64,7 +64,7 @@ cargo run -p locomotion -- --transport sim --checkpoint <ONNX> --max-steps 100
 
 默认仿真 socket 为 `/tmp/se3_sim_loop.sock`，locomotion 客户端 socket 为 `/tmp/se3_locomotion.sock`；可分别用 `se3-sim-loop --socket-path`、`locomotion --sim-socket-path` 和 `locomotion --sim-client-socket-path` 覆盖。
 
-`sim_loop` 协议只接受有限浮点数；收到 NaN、正负无穷或长度错误的状态包时会丢弃该包，不把无效状态送进 locomotion 闭环。
+`sim_loop` 协议在打包/解包 policy 帧时会拒绝 NaN、正负无穷和长度不匹配的包；生成 state 帧时如出现非有限值会丢弃该帧，不把无效状态送进 locomotion 闭环。
 
 locomotion 默认从 `zoo` 读取 `serial_leg_dev` 的 robot/policy 配置。命令源默认为固定静止命令，也可以接 XInput 手柄：
 
