@@ -25,6 +25,7 @@ use auto_aim_core::rbt_mod::{
 };
 use auto_aim_core::{
     rbt_infra::rbt_cfg::{DetectorCfg, RbtCfg},
+    rbt_infra::rbt_err::RbtResult,
     rbt_infra::{
         rbt_global::{GENERIC_RBT_CFG, IS_RUNNING},
         rbt_queue_async::RbtSPSCQueueAsync,
@@ -607,7 +608,7 @@ pub fn pre_process(
     detector_cfg: DetectorCfg,
     runtime_router: RuntimeRouter,
     completion: RuntimePipelineCompletion,
-) -> JoinHandle<()> {
+) -> JoinHandle<RbtResult<()>> {
     tokio::spawn(async move {
         let completion_guard = completion.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -631,17 +632,24 @@ pub fn pre_process(
                     summary.avg_preprocess()
                 );
                 IS_RUNNING.store(false, Ordering::SeqCst);
+                completion_guard.mark_source_done();
+                Ok(())
             }
             Err(err) => {
                 error!("pre_process: video worker join failed: {err}");
                 IS_RUNNING.store(false, Ordering::SeqCst);
+                completion_guard.mark_source_done();
+                Err(auto_aim_core::rbt_infra::rbt_err::RbtError::StringError(
+                    format!("pre_process video worker join failed: {err}"),
+                ))
             }
             Ok(Err(err)) => {
                 error!("pre_process: {err}");
                 IS_RUNNING.store(false, Ordering::SeqCst);
+                completion_guard.mark_source_done();
+                Err(err)
             }
         }
-        completion_guard.mark_source_done();
     })
 }
 
@@ -651,7 +659,7 @@ fn run_video_preprocess_loop(
     feedback_queue: Arc<RbtSPSCQueueAsync<SensData>>,
     _detector_cfg: DetectorCfg,
     runtime_router: RuntimeRouter,
-) -> Result<PreprocessSummary, String> {
+) -> RbtResult<PreprocessSummary> {
     let video_path = video_input_path();
     let mut reader = FfmpegVideoReader::open(&video_path)?;
     let mut frame_id = 0_u64;
@@ -698,7 +706,7 @@ fn run_video_preprocess_loop(
             let mut rbt_frame = RbtFrame::new();
             let preprocess_started = StdInstant::now();
             let gray_frame = frame_img.to_luma8();
-            let transform = preprocess_letterbox_f16(rbt_frame.pre_data(), &frame_img);
+            let transform = preprocess_letterbox_f16(rbt_frame.pre_data(), &frame_img)?;
             summary.preprocess_total += preprocess_started.elapsed();
             rbt_frame.set_gray_frame(gray_frame);
             rbt_frame.set_letterbox_transform(transform);
@@ -1929,7 +1937,8 @@ mod tests {
         assert!(frame.height() > 0);
 
         let mut input = nd::Array4::<half::f16>::zeros((1, 3, 640, 640));
-        let transform = preprocess_letterbox_f16(input.view_mut(), &frame);
+        let transform = preprocess_letterbox_f16(input.view_mut(), &frame)
+            .expect("letterbox preprocessing should resize decoded video frame");
 
         assert_eq!(input.shape(), &[1, 3, 640, 640]);
         assert_eq!(transform.image_width, frame.width());

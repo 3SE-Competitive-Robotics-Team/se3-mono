@@ -3,11 +3,12 @@
 
 use std::collections::HashMap;
 
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use half::f16;
-use image::imageops::FilterType;
 
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
+use crate::rbt_infra::rbt_err::RbtResult;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
@@ -57,7 +58,7 @@ impl LetterboxTransform {
 pub fn preprocess_letterbox_f16(
     mut input_array: nd::ArrayViewMut4<'_, f16>,
     image: &image::DynamicImage,
-) -> LetterboxTransform {
+) -> RbtResult<LetterboxTransform> {
     input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
 
     let shape = input_array.shape();
@@ -67,7 +68,7 @@ pub fn preprocess_letterbox_f16(
     let image_height = image.height();
 
     if target_width == 0 || target_height == 0 || image_width == 0 || image_height == 0 {
-        return LetterboxTransform {
+        return Ok(LetterboxTransform {
             input_width: target_width,
             input_height: target_height,
             image_width,
@@ -77,7 +78,7 @@ pub fn preprocess_letterbox_f16(
             pad_x: 0.0,
             pad_y: 0.0,
             scale: 1.0,
-        };
+        });
     }
 
     let scale =
@@ -88,8 +89,10 @@ pub fn preprocess_letterbox_f16(
     let pad_y = 0;
 
     let rgb = image.to_rgb8();
-    let resized =
-        image::imageops::resize(&rgb, resized_width, resized_height, FilterType::Triangle);
+    let mut resized = image::RgbImage::new(resized_width, resized_height);
+    let resize_options =
+        ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+    Resizer::new().resize(&rgb, &mut resized, Some(&resize_options))?;
 
     for (x, y, pixel) in resized.enumerate_pixels() {
         let x_new = x as usize;
@@ -101,7 +104,7 @@ pub fn preprocess_letterbox_f16(
         input_array[[0, 2, y_new, x_new]] = f16::from_f32(b as f32 / 255.0);
     }
 
-    LetterboxTransform {
+    Ok(LetterboxTransform {
         input_width: target_width,
         input_height: target_height,
         image_width,
@@ -111,7 +114,7 @@ pub fn preprocess_letterbox_f16(
         pad_x: pad_x as f32,
         pad_y: pad_y as f32,
         scale,
-    }
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -524,7 +527,8 @@ mod tests {
         let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([1, 2, 3, 255])));
         let mut input = nd::Array4::<f16>::zeros((1, 3, 4, 4));
 
-        let transform = preprocess_letterbox_f16(input.view_mut(), &image);
+        let transform = preprocess_letterbox_f16(input.view_mut(), &image)
+            .expect("letterbox preprocessing should resize RGBA input via RGB conversion");
 
         assert_eq!(transform.resized_width, 4);
         assert_eq!(transform.resized_height, 4);
@@ -536,7 +540,8 @@ mod tests {
 
         let wide = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(4, 2, Rgba([9, 8, 7, 255])));
         let mut padded = nd::Array4::<f16>::zeros((1, 3, 4, 4));
-        let transform = preprocess_letterbox_f16(padded.view_mut(), &wide);
+        let transform = preprocess_letterbox_f16(padded.view_mut(), &wide)
+            .expect("letterbox preprocessing should resize wide RGBA input via RGB conversion");
 
         assert_eq!(transform.resized_width, 4);
         assert_eq!(transform.resized_height, 2);

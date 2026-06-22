@@ -45,8 +45,9 @@ impl ArmorDetector {
     }
 
     /// 前处理：等比例 resize、左上角 letterbox、RGB CHW、归一化到 FP16。
-    fn pre_process(&mut self) {
-        self.letterbox = preprocess_letterbox_f16(self.input.view_mut(), &self.img);
+    fn pre_process(&mut self) -> RbtResult<()> {
+        self.letterbox = preprocess_letterbox_f16(self.input.view_mut(), &self.img)?;
+        Ok(())
     }
 
     pub fn post_process(
@@ -111,7 +112,7 @@ pub fn pipeline(cfg: &rbt_cfg::DetectorCfg) -> RbtResult<HashMap<EnemyId, Vec<De
     let elapsed = tim.elapsed();
     info!("Initialization time elapsed: {:?}", elapsed);
 
-    detector.pre_process();
+    detector.pre_process()?;
 
     let tim2 = std::time::Instant::now();
     let outputs: SessionOutputs<'_> =
