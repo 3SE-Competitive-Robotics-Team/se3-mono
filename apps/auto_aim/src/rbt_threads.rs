@@ -1949,37 +1949,4 @@ mod tests {
         assert_eq!(gray.width(), frame.width());
         assert_eq!(gray.height(), frame.height());
     }
-
-    #[test]
-    #[ignore = "local preprocess benchmark; depends on bundled video and ffmpeg"]
-    fn bench_armor_video_preprocess_first_frame() {
-        let video_path = video_input_path();
-        assert!(video_path.is_file(), "{} is missing", video_path.display());
-        let mut reader = FfmpegVideoReader::open(&video_path).expect("ffmpeg should open video");
-        let frame = reader
-            .read_frame()
-            .expect("ffmpeg should decode the first video frame")
-            .expect("video should contain at least one frame");
-
-        let warmup = 10;
-        let iterations = 200;
-        let mut input = nd::Array4::<half::f16>::zeros((1, 3, 640, 640));
-        for _ in 0..warmup {
-            let _ = preprocess_letterbox_f16(input.view_mut(), &frame)
-                .expect("warmup preprocess should succeed");
-        }
-
-        let started = StdInstant::now();
-        for _ in 0..iterations {
-            let _ = preprocess_letterbox_f16(input.view_mut(), &frame)
-                .expect("benchmark preprocess should succeed");
-        }
-        let avg = started.elapsed() / iterations;
-        println!(
-            "armor preprocess first frame {}x{} avg {:?} over {iterations} iterations",
-            frame.width(),
-            frame.height(),
-            avg
-        );
-    }
 }
