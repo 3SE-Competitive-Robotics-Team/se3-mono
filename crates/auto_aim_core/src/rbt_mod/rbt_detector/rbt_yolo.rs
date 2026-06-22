@@ -71,6 +71,8 @@ pub fn preprocess_letterbox_f16(
     let image_width = image.width();
     let image_height = image.height();
 
+    input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
+
     if target_width == 0 || target_height == 0 || image_width == 0 || image_height == 0 {
         return Ok(LetterboxTransform {
             input_width: target_width,
@@ -91,8 +93,6 @@ pub fn preprocess_letterbox_f16(
     let resized_height = ((image_height as f32 * scale).round() as u32).clamp(1, target_height);
     let pad_x = ((target_width - resized_width) / 2) as usize;
     let pad_y = ((target_height - resized_height) / 2) as usize;
-
-    input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
 
     let rgb = image.to_rgb8();
     let mut resized = image::RgbImage::new(resized_width, resized_height);
@@ -556,6 +556,19 @@ mod tests {
         assert!((padded[[0, 0, 0, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
         assert!((padded[[0, 0, 1, 0]].to_f32() - 9.0 / 255.0).abs() < 0.001);
         assert!((padded[[0, 0, 3, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+
+        let tall = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 4, Rgba([6, 5, 4, 255])));
+        let mut horizontal_padded = nd::Array4::<f16>::zeros((1, 3, 4, 4));
+        let transform = preprocess_letterbox_f16(horizontal_padded.view_mut(), &tall)
+            .expect("letterbox preprocessing should resize tall RGBA input via RGB conversion");
+
+        assert_eq!(transform.resized_width, 2);
+        assert_eq!(transform.resized_height, 4);
+        assert_eq!(transform.pad_x, 1.0);
+        assert_eq!(transform.pad_y, 0.0);
+        assert!((horizontal_padded[[0, 0, 0, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert!((horizontal_padded[[0, 0, 0, 1]].to_f32() - 6.0 / 255.0).abs() < 0.001);
+        assert!((horizontal_padded[[0, 0, 0, 3]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
     }
 
     #[test]
