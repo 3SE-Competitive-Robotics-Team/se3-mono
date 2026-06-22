@@ -13,6 +13,8 @@ use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
 
 pub const LETTERBOX_PAD_VALUE: f32 = 0.0;
+static FIR_RESIZE_FALLBACK_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LetterboxTransform {
@@ -91,10 +93,12 @@ pub fn preprocess_letterbox_f16(
     let mut resized = image::RgbImage::new(resized_width, resized_height);
     let resize_options =
         ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
-    if Resizer::new()
-        .resize(&rgb, &mut resized, Some(&resize_options))
-        .is_err()
-    {
+    if let Err(err) = Resizer::new().resize(&rgb, &mut resized, Some(&resize_options)) {
+        if !FIR_RESIZE_FALLBACK_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::warn!(
+                "fast_image_resize failed in YOLO letterbox resize; falling back to image::resize(Triangle): {err}"
+            );
+        }
         resized = image::imageops::resize(
             &rgb,
             resized_width,
