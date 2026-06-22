@@ -13,7 +13,7 @@ RoboMaster 机器人运行时代码 monorepo。
 | `apps/locomotion` / `crates/locomotion_core` | locomotion 策略运行时、ONNX 推理、观测构造、动作解码和 CDC/sim transport。 |
 | `crates/se3_command` | 跨运行时共享的操作命令类型，当前包含底盘、云台和跳跃命令。 |
 | `crates/se3_input` | 跨平台输入设备封装，当前支持 XInput 手柄采样和死区处理。 |
-| `crates/se3_log` | 共享日志初始化，默认写本地 `log/`，部署机存在 `/var/opt/se3/logs` 时写部署日志目录。 |
+| `crates/se3_log` | 共享日志初始化，默认写本地 `logs/`，部署机存在 `/var/opt/se3/logs` 时写部署日志目录。 |
 | `crates/se3_ort_ep` | ONNX Runtime execution provider 选择策略。 |
 | `crates/zoo` | 机器人、策略、仿真和命令源的类型化默认配置注册表。 |
 | `tools/replay_telemetry` | telemetry 回放验证工具。 |
@@ -41,7 +41,7 @@ RoboMaster 机器人运行时代码 monorepo。
 | `model/recovery/model_4999_recovery_gru.onnx` | `serial_leg_dev` 默认 locomotion policy checkpoint。 |
 | `videos/offline_capture_bundle.avi` | `auto_aim` 默认离线输入视频。 |
 | `imgs/` | 本地调试图片。 |
-| `log/` | 运行日志。 |
+| `logs/` | 运行日志和 Rerun 记录。 |
 | `rerun-log/` | Rerun 调试记录。 |
 
 这些目录已写入 `.gitignore`。编译、clippy 和单元测试不要求资源存在；运行 `cargo run -p auto_aim --release` 时，配置里引用的模型和默认视频必须存在；运行 `cargo run -p locomotion -- --robot serial_leg_dev` 时，需要默认 policy checkpoint 存在，或者用 `--checkpoint <ONNX>` 显式覆盖。

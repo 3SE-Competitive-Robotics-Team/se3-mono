@@ -149,7 +149,7 @@ SE3 的默认配置（`rbt_cfg.toml`）随部署包放在：
     policy.onnx
 ```
 
-日志优先交给 systemd journal。Rust 运行时通过 `se3_log` 统一初始化文件日志：默认开发环境写仓库根目录 `log/`，如果部署机上存在 `/var/opt/se3/logs` 则写到部署日志目录，也可以用 `SE3_LOG_DIR` 显式覆盖。需要落盘文件时，目标目录是：
+日志优先交给 systemd journal。Rust 运行时通过 `se3_log` 统一初始化文件日志：默认开发环境写仓库根目录 `logs/`，如果部署机上存在 `/var/opt/se3/logs` 则写到部署日志目录，也可以用 `SE3_LOG_DIR` 显式覆盖。需要落盘文件时，目标目录是：
 
 ```text
 /var/opt/se3/logs/

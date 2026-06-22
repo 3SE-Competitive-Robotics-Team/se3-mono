@@ -41,7 +41,13 @@ def test_build_config_uses_robot_profile_defaults() -> None:
     assert cfg.leg_kd == profile.leg_kd
     assert cfg.wheel_kd == profile.wheel_kd
     assert cfg.max_steps == 0
-    assert cfg.viewer == "none"
+    assert cfg.viewer == "rerun"
+    assert cfg.rerun_save is not None
+    assert cfg.rerun_save.parts[0] == "logs"
+    assert len(cfg.rerun_save.parts) == 5
+    assert cfg.rerun_save.suffix == ".rrd"
+    assert ":" not in cfg.rerun_save.name
+    assert "pid" not in cfg.rerun_save.name
 
 
 def test_build_config_prefers_explicit_cli_overrides(tmp_path: Path) -> None:

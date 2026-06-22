@@ -35,7 +35,7 @@
 | `videos/offline_capture_bundle.avi` | 默认离线输入视频，`apps/auto_aim` 启动时会检查这个文件。 |
 | `imgs/` | 本地调试图片目录。 |
 | `rerun-log/` | Rerun 调试记录输出目录。 |
-| `log/` | 运行日志目录。 |
+| `logs/` | 运行日志目录。 |
 
 如果只做编译和单元测试，不需要准备这些资源。运行 `auto_aim` 主程序时，模型文件和默认视频必须存在。
 
@@ -52,7 +52,7 @@
 
 `detector_cfg.ort_ep = "auto"` 时，运行时会按平台和可见库选择 EP。macOS 默认 CoreML；Linux aarch64 在 CUDA、TensorRT 或 cuDNN 库可见时优先走硬件加速，否则回退；其他平台按 `se3_ort_ep` 的策略选择。
 
-日志由 `se3_log` 统一初始化。开发机默认写仓库根目录 `log/`，机器人部署环境中如果存在 `/var/opt/se3/logs`，文件日志写到该部署目录；也可以用 `SE3_LOG_DIR` 覆盖。
+日志由 `se3_log` 统一初始化。开发机默认写仓库根目录 `logs/`，机器人部署环境中如果存在 `/var/opt/se3/logs`，文件日志写到该部署目录；也可以用 `SE3_LOG_DIR` 覆盖。
 
 ## 构建、检查和运行
 

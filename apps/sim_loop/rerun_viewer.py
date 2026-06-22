@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,27 +80,30 @@ class RerunSimViewerConfig:
 class RerunSimViewer:
     def __init__(self, cfg: RerunSimViewerConfig) -> None:
         self.cfg = cfg
-        rr.init(cfg.app_id, spawn=False)
+        _disable_rerun_atexit_shutdown()
+        self.recording = rr.RecordingStream(cfg.app_id, make_default=True)
+        sinks = []
         if cfg.address:
-            rr.connect_grpc(cfg.address)
+            sinks.append(rr.GrpcSink(_rerun_grpc_url(cfg.address)))
         elif cfg.spawn:
             rr.spawn(
-                connect=True,
+                connect=False,
                 detach_process=True,
                 memory_limit=cfg.memory_limit,
                 server_memory_limit=cfg.memory_limit,
             )
+            sinks.append(rr.GrpcSink(_rerun_grpc_url(None)))
         if cfg.save_path is not None:
             cfg.save_path.parent.mkdir(parents=True, exist_ok=True)
-            rr.save(str(cfg.save_path))
-        rr.send_blueprint(_blueprint(), make_active=True, make_default=True)
+            sinks.append(rr.FileSink(str(cfg.save_path), write_footer=False))
+        if sinks:
+            self.recording.set_sinks(*sinks)
+        self.recording.send_blueprint(_blueprint(), make_active=True, make_default=True)
         self.body_paths: list[str] = []
         self.geom_paths: dict[int, str] = {}
 
     def close(self) -> None:
-        disconnect = getattr(rr, "disconnect", None)
-        if callable(disconnect):
-            disconnect()
+        self.recording.flush(timeout_sec=5.0)
 
     def log_model(self, model: mujoco.MjModel) -> None:
         _log_timeseries_styles()
@@ -142,10 +146,27 @@ class RerunSimViewer:
         for name, value in zip(_ACTION_LEG_NAMES, target.joint_pos, strict=True):
             rr.log(f"/metrics/action/joint_pos/{name}", rr.Scalars(float(value)))
         for name, value in zip(_ACTION_WHEEL_NAMES, target.wheel_vel, strict=True):
-            rr.log(f"/metrics/action/wheel_vel_mps/{name}", rr.Scalars(float(value) * _WHEEL_RADIUS_M))
+            rr.log(
+                f"/metrics/action/wheel_vel_mps/{name}", rr.Scalars(float(value) * _WHEEL_RADIUS_M)
+            )
             rr.log(f"/metrics/action/wheel_vel_rad_s/{name}", rr.Scalars(float(value)))
         for name, value in zip(_CTRL_NAMES, ctrl, strict=True):
             rr.log(f"/metrics/ctrl/{name}", rr.Scalars(float(value)))
+
+
+def _rerun_grpc_url(address: str | None) -> str:
+    if address is None:
+        return "rerun+http://127.0.0.1:9876/proxy"
+    if "://" in address:
+        return address
+    return f"rerun+http://{address}/proxy"
+
+
+def _disable_rerun_atexit_shutdown() -> None:
+    unregister_shutdown = getattr(rr, "unregister_shutdown", None)
+    if callable(unregister_shutdown):
+        with suppress(ValueError):
+            unregister_shutdown()
 
 
 def _blueprint() -> rrb.Blueprint:
@@ -287,9 +308,15 @@ def _semantic_geom_color(name: str) -> tuple[int, int, int, int]:
 
 
 def _geom_side(name: str) -> str | None:
-    if any(token in name for token in ("left", "lf_", "lf0", "lf1", "l_wheel", "visual_lf", "visual_l_")):
+    if any(
+        token in name
+        for token in ("left", "lf_", "lf0", "lf1", "l_wheel", "visual_lf", "visual_l_")
+    ):
         return "left"
-    if any(token in name for token in ("right", "rf_", "rf0", "rf1", "r_wheel", "visual_rf", "visual_r_")):
+    if any(
+        token in name
+        for token in ("right", "rf_", "rf0", "rf1", "r_wheel", "visual_rf", "visual_r_")
+    ):
         return "right"
     return None
 
