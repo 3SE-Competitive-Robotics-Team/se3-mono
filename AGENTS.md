@@ -1,10 +1,10 @@
 # Repository Instructions
 
-This repository is a Rust monorepo for RoboMaster robot runtime code. It is still a scaffold, so do not claim working crates, builds, tests, deployment, or runtime behavior until those pieces exist.
+This repository is a Rust monorepo for RoboMaster robot runtime code. Some runtime and tool crates now exist, but hardware deployment is still under active migration, so do not claim unverified builds, tests, deployment, or runtime behavior.
 
 ## Layout
 
-- `apps/`: runnable process crates, such as `control`, `auto_strike`, and future robot processes.
+- `apps/`: runnable process crates, such as `locomotion`, `auto_aim`, and future robot processes.
 - `crates/`: shared Rust libraries and process-independent logic.
 - `drivers/`: hardware-specific Rust crates and protocol adapters.
 - `platforms/`: build, cross-compilation, runtime, and deployment settings for compute platforms.
