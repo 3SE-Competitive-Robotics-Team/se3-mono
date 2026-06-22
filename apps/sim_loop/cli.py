@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 from .runtime import SimLoopConfig, SimLoopRuntime
@@ -35,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--viewer",
         choices=["none", "rerun", "mujoco"],
-        default="none",
+        default="rerun",
         help="Viewer mode. Use 'rerun' on macOS; 'mujoco' requires mjpython on macOS.",
     )
     parser.add_argument("--rerun-address", default=None)
@@ -56,8 +57,19 @@ def build_config(args: argparse.Namespace) -> SimLoopConfig:
         wheel_kd=args.wheel_kd if args.wheel_kd is not None else profile.wheel_kd,
         viewer=args.viewer,
         rerun_address=args.rerun_address,
-        rerun_save=args.rerun_save,
+        rerun_save=args.rerun_save if args.rerun_save is not None else default_rerun_save_path(),
         rerun_memory_limit=args.rerun_memory_limit,
+    )
+
+
+def default_rerun_save_path() -> Path:
+    now = datetime.now().astimezone()
+    return (
+        Path("logs")
+        / f"{now.year:04}"
+        / f"{now.month:02}"
+        / f"{now.day:02}"
+        / f"{now.hour:02}-{now.minute:02}-{now.second:02}.rrd"
     )
 
 

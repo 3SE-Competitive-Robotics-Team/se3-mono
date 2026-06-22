@@ -88,7 +88,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn local_log_root() -> PathBuf {
-    workspace_root().join("log")
+    workspace_root().join("logs")
 }
 
 fn log_root() -> PathBuf {
@@ -129,11 +129,10 @@ pub fn init(config: &LoggerConfig) -> LogResult<Option<LoggerGuard>> {
         let file_filter: RustLogFilter = config.file_log_filter.as_str().into();
         let now = Zoned::now();
         let file_name = format!(
-            "{:02}:{:02}:{:02}-pid{}",
+            "{:02}-{:02}-{:02}.log",
             now.hour(),
             now.minute(),
-            now.second(),
-            std::process::id()
+            now.second()
         );
         let directory_name = daily_log_dir(&now);
         std::fs::create_dir_all(&directory_name).map_err(|source| {
@@ -207,6 +206,6 @@ mod tests {
 
     #[test]
     fn local_log_root_uses_workspace_log_dir() {
-        assert_eq!(local_log_root(), workspace_root().join("log"));
+        assert_eq!(local_log_root(), workspace_root().join("logs"));
     }
 }
