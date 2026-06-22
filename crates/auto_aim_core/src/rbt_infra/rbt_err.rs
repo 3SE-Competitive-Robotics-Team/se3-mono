@@ -16,9 +16,6 @@ pub enum RbtError {
     #[error("Ort error: {0}")]
     OrtError(#[from] ort::Error),
 
-    #[error("YOLO letterbox resize failed: {0}")]
-    YoloLetterboxResize(#[from] fast_image_resize::ResizeError),
-
     // 配置相关错误
     #[error("Toml parse error: {0}")]
     TomlParseError(#[from] toml::de::Error),

@@ -3,17 +3,16 @@
 
 use std::collections::HashMap;
 
-use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use half::f16;
 
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
-use crate::rbt_infra::rbt_err::RbtResult;
+use crate::rbt_infra::rbt_err::{RbtError, RbtResult};
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmor;
 use crate::rbt_mod::rbt_armor::detected_armor::DetectedArmorMeta;
 use crate::rbt_mod::rbt_estimator::rbt_enemy_dynamic_model::{EnemyFaction, EnemyId};
 
-pub const LETTERBOX_PAD_VALUE: f32 = 0.0;
+pub const LETTERBOX_PAD_VALUE: f32 = 114.0 / 255.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LetterboxTransform {
@@ -59,9 +58,13 @@ pub fn preprocess_letterbox_f16(
     mut input_array: nd::ArrayViewMut4<'_, f16>,
     image: &image::DynamicImage,
 ) -> RbtResult<LetterboxTransform> {
-    input_array.fill(f16::from_f32(LETTERBOX_PAD_VALUE));
-
     let shape = input_array.shape();
+    if shape[0] != 1 || shape[1] != 3 {
+        return Err(RbtError::StringError(format!(
+            "YOLO letterbox expects input tensor shape [1,3,H,W], got {shape:?}"
+        )));
+    }
+
     let target_height = shape[2] as u32;
     let target_width = shape[3] as u32;
     let image_width = image.width();
@@ -83,26 +86,19 @@ pub fn preprocess_letterbox_f16(
 
     let scale =
         (target_width as f32 / image_width as f32).min(target_height as f32 / image_height as f32);
-    let resized_width = ((image_width as f32 * scale).floor() as u32).clamp(1, target_width);
-    let resized_height = ((image_height as f32 * scale).floor() as u32).clamp(1, target_height);
-    let pad_x = 0;
-    let pad_y = 0;
+    let resized_width = ((image_width as f32 * scale).round() as u32).clamp(1, target_width);
+    let resized_height = ((image_height as f32 * scale).round() as u32).clamp(1, target_height);
+    let pad_x = ((target_width - resized_width) / 2) as usize;
+    let pad_y = ((target_height - resized_height) / 2) as usize;
 
-    let rgb = image.to_rgb8();
-    let mut resized = image::RgbImage::new(resized_width, resized_height);
-    let resize_options =
-        ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
-    Resizer::new().resize(&rgb, &mut resized, Some(&resize_options))?;
-
-    for (x, y, pixel) in resized.enumerate_pixels() {
-        let x_new = x as usize;
-        let y_new = y as usize;
-        let [r, g, b] = pixel.0;
-
-        input_array[[0, 0, y_new, x_new]] = f16::from_f32(r as f32 / 255.0);
-        input_array[[0, 1, y_new, x_new]] = f16::from_f32(g as f32 / 255.0);
-        input_array[[0, 2, y_new, x_new]] = f16::from_f32(b as f32 / 255.0);
-    }
+    write_center_letterbox_f16(
+        &mut input_array,
+        image,
+        resized_width as usize,
+        resized_height as usize,
+        pad_x,
+        pad_y,
+    )?;
 
     Ok(LetterboxTransform {
         input_width: target_width,
@@ -115,6 +111,123 @@ pub fn preprocess_letterbox_f16(
         pad_y: pad_y as f32,
         scale,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResizeLutEntry {
+    lo: usize,
+    hi: usize,
+    hi_weight: f32,
+}
+
+fn build_resize_lut(src_len: usize, dst_len: usize) -> Vec<ResizeLutEntry> {
+    let scale = src_len as f32 / dst_len as f32;
+    let src_max = src_len.saturating_sub(1);
+
+    (0..dst_len)
+        .map(|dst| {
+            let src = ((dst as f32 + 0.5) * scale - 0.5).max(0.0);
+            let lo = (src.floor() as usize).min(src_max);
+            let hi = (lo + 1).min(src_max);
+            ResizeLutEntry {
+                lo,
+                hi,
+                hi_weight: src - lo as f32,
+            }
+        })
+        .collect()
+}
+
+fn write_center_letterbox_f16(
+    input_array: &mut nd::ArrayViewMut4<'_, f16>,
+    image: &image::DynamicImage,
+    resized_width: usize,
+    resized_height: usize,
+    pad_x: usize,
+    pad_y: usize,
+) -> RbtResult<()> {
+    let shape = input_array.shape();
+    let target_height = shape[2];
+    let target_width = shape[3];
+    let channel_size = target_height * target_width;
+    let input = input_array.as_slice_mut().ok_or_else(|| {
+        RbtError::StringError("YOLO letterbox input tensor must be contiguous".to_string())
+    })?;
+    let (r_plane, rest) = input.split_at_mut(channel_size);
+    let (g_plane, b_plane) = rest.split_at_mut(channel_size);
+
+    let rgb_storage;
+    let rgb = match image {
+        image::DynamicImage::ImageRgb8(rgb) => rgb,
+        _ => {
+            rgb_storage = image.to_rgb8();
+            &rgb_storage
+        }
+    };
+    let src = rgb.as_raw();
+    let src_width = rgb.width() as usize;
+    let src_height = rgb.height() as usize;
+    let x_lut = build_resize_lut(src_width, resized_width);
+    let y_lut = build_resize_lut(src_height, resized_height);
+    let pad_value = f16::from_f32(LETTERBOX_PAD_VALUE);
+    let inv_255 = 1.0 / 255.0;
+
+    for out_y in 0..target_height {
+        let row_start = out_y * target_width;
+        let row_end = row_start + target_width;
+        if out_y < pad_y || out_y >= pad_y + resized_height {
+            r_plane[row_start..row_end].fill(pad_value);
+            g_plane[row_start..row_end].fill(pad_value);
+            b_plane[row_start..row_end].fill(pad_value);
+            continue;
+        }
+
+        let y = y_lut[out_y - pad_y];
+        let y_inv = 1.0 - y.hi_weight;
+        let src_row_lo = y.lo * src_width * 3;
+        let src_row_hi = y.hi * src_width * 3;
+
+        let image_start = row_start + pad_x;
+        let image_end = image_start + resized_width;
+        r_plane[row_start..image_start].fill(pad_value);
+        g_plane[row_start..image_start].fill(pad_value);
+        b_plane[row_start..image_start].fill(pad_value);
+        r_plane[image_end..row_end].fill(pad_value);
+        g_plane[image_end..row_end].fill(pad_value);
+        b_plane[image_end..row_end].fill(pad_value);
+
+        for (dst_x, x) in x_lut.iter().enumerate() {
+            let x_inv = 1.0 - x.hi_weight;
+            let out_idx = image_start + dst_x;
+            let src00 = src_row_lo + x.lo * 3;
+            let src01 = src_row_lo + x.hi * 3;
+            let src10 = src_row_hi + x.lo * 3;
+            let src11 = src_row_hi + x.hi * 3;
+            let w00 = x_inv * y_inv;
+            let w01 = x.hi_weight * y_inv;
+            let w10 = x_inv * y.hi_weight;
+            let w11 = x.hi_weight * y.hi_weight;
+
+            let r = src[src00] as f32 * w00
+                + src[src01] as f32 * w01
+                + src[src10] as f32 * w10
+                + src[src11] as f32 * w11;
+            let g = src[src00 + 1] as f32 * w00
+                + src[src01 + 1] as f32 * w01
+                + src[src10 + 1] as f32 * w10
+                + src[src11 + 1] as f32 * w11;
+            let b = src[src00 + 2] as f32 * w00
+                + src[src01 + 2] as f32 * w01
+                + src[src10 + 2] as f32 * w10
+                + src[src11 + 2] as f32 * w11;
+
+            r_plane[out_idx] = f16::from_f32(r * inv_255);
+            g_plane[out_idx] = f16::from_f32(g * inv_255);
+            b_plane[out_idx] = f16::from_f32(b * inv_255);
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -523,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn letterbox_top_left_pads_black_and_normalizes_rgb() {
+    fn letterbox_centers_with_114_padding_and_normalizes_rgb() {
         let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([1, 2, 3, 255])));
         let mut input = nd::Array4::<f16>::zeros((1, 3, 4, 4));
 
@@ -545,9 +658,11 @@ mod tests {
 
         assert_eq!(transform.resized_width, 4);
         assert_eq!(transform.resized_height, 2);
-        assert_eq!(transform.pad_y, 0.0);
-        assert!((padded[[0, 0, 0, 0]].to_f32() - 9.0 / 255.0).abs() < 0.001);
-        assert!((padded[[0, 0, 2, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert_eq!(transform.pad_x, 0.0);
+        assert_eq!(transform.pad_y, 1.0);
+        assert!((padded[[0, 0, 0, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
+        assert!((padded[[0, 0, 1, 0]].to_f32() - 9.0 / 255.0).abs() < 0.001);
+        assert!((padded[[0, 0, 3, 0]].to_f32() - LETTERBOX_PAD_VALUE).abs() < 0.001);
     }
 
     #[test]
