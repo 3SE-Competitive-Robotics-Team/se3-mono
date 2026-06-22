@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use half::f16;
-use image::imageops::FilterType;
 
 use crate::rbt_base::rbt_geometry::rbt_point2::RbtImgPoint2;
 use crate::rbt_infra::rbt_cfg::ArmorDetectorCfg;
@@ -88,8 +88,20 @@ pub fn preprocess_letterbox_f16(
     let pad_y = 0;
 
     let rgb = image.to_rgb8();
-    let resized =
-        image::imageops::resize(&rgb, resized_width, resized_height, FilterType::Triangle);
+    let mut resized = image::RgbImage::new(resized_width, resized_height);
+    let resize_options =
+        ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+    if Resizer::new()
+        .resize(&rgb, &mut resized, Some(&resize_options))
+        .is_err()
+    {
+        resized = image::imageops::resize(
+            &rgb,
+            resized_width,
+            resized_height,
+            image::imageops::FilterType::Triangle,
+        );
+    }
 
     for (x, y, pixel) in resized.enumerate_pixels() {
         let x_new = x as usize;
